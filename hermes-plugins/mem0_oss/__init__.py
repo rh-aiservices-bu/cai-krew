@@ -10,7 +10,8 @@ Config (env vars or ~/.hermes/.env):
 
 Scoping behaviour:
   - Writes include user_id + agent_id + run_id (session_id from Hermes)
-  - Reads filter by user_id only → cross-session, cross-agent recall
+  - Personal reads filter by user_id → cross-session, cross-agent recall for current user
+  - Team reads use no user filter → surfaces memories from all users with [user_id] attribution
 """
 from __future__ import annotations
 
@@ -60,7 +61,7 @@ class Mem0OssProvider(MemoryProvider):
         if os.getenv("MEM0_AGENT_ID"):
             self._agent_id = os.getenv("MEM0_AGENT_ID")
         elif kwargs.get("agent_identity"):
-            self._agent_id = f"hermes_{kwargs['agent_identity']}"
+            self._agent_id = f"{kwargs['agent_identity']}"
         else:
             self._agent_id = "hermes"
         self._run_id   = session_id
@@ -100,13 +101,23 @@ class Mem0OssProvider(MemoryProvider):
 
     # ── Memory helpers ───────────────────────────────────────────────────────
 
-    def _search(self, query: str, top_k: int = 5) -> List[Dict]:
+    def _search_personal(self, query: str, top_k: int = 5) -> List[Dict]:
+        """Search memories for the current user only."""
         data = self._request("POST", "/search", json={
             "query":   query,
             "filters": {"user_id": self._user_id},
             "top_k":   top_k,
         })
         return data if isinstance(data, list) else data.get("results", [])
+
+    def _search_team(self, query: str, top_k: int = 3) -> List[Dict]:
+        """Search memories across all users, excluding the current user."""
+        data = self._request("POST", "/search", json={
+            "query":  query,
+            "top_k":  top_k + 5,  # fetch extra to account for filtering out current user
+        })
+        results = data if isinstance(data, list) else data.get("results", [])
+        return [m for m in results if m.get("user_id") != self._user_id][:top_k]
 
     def _add(self, messages: List[Dict], infer: bool = True) -> None:
         self._request("POST", "/memories", json={
@@ -125,10 +136,14 @@ class Mem0OssProvider(MemoryProvider):
 
     def system_prompt_block(self) -> str:
         return (
-            "You have persistent long-term memory via mem0. "
+            f"You have persistent long-term memory via mem0 (current user: {self._user_id}). "
             "Use `mem0_search` to recall relevant facts before answering, "
-            "`mem0_profile` to review everything stored about the user, "
-            "and `mem0_conclude` to save a specific fact verbatim."
+            "`mem0_profile` to review everything stored about the current user, "
+            "and `mem0_conclude` to save a specific fact verbatim.\n"
+            "Memory results are split into two tiers:\n"
+            "- 'Your memories' — facts about the current user (high confidence, refer to them directly)\n"
+            "- 'Team memories' — facts from other users, prefixed with [user_id] "
+            "(attribute them by name, e.g. 'Erwan mentioned he likes carrots')"
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -143,11 +158,20 @@ class Mem0OssProvider(MemoryProvider):
 
     def _bg_prefetch(self, query: str) -> None:
         try:
-            memories = self._search(query, top_k=5)
-            if memories:
-                lines = "\n".join(f"- {m.get('memory', m)}" for m in memories)
+            personal = self._search_personal(query, top_k=5)
+            team     = self._search_team(query, top_k=3)
+            sections = []
+            if personal:
+                lines = "\n".join(f"- {m.get('memory', m)}" for m in personal)
+                sections.append(f"## Your memories:\n{lines}")
+            if team:
+                lines = "\n".join(
+                    f"- [{m.get('user_id', '?')}] {m.get('memory', m)}" for m in team
+                )
+                sections.append(f"## Team memories:\n{lines}")
+            if sections:
                 with self._lock:
-                    self._prefetch_cache = f"## Relevant memories:\n{lines}"
+                    self._prefetch_cache = "\n\n".join(sections)
         except Exception as exc:
             logger.debug("mem0_oss prefetch failed: %s", exc)
 
@@ -182,7 +206,7 @@ class Mem0OssProvider(MemoryProvider):
         return [
             {
                 "name": "mem0_search",
-                "description": "Search long-term memory for facts relevant to a query.",
+                "description": "Search long-term memory for facts relevant to a query. Returns personal memories (current user) and team memories (other users, attributed by user_id).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -229,10 +253,20 @@ class Mem0OssProvider(MemoryProvider):
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         try:
             if tool_name == "mem0_search":
-                memories = self._search(args["query"], top_k=args.get("top_k", 5))
-                if not memories:
+                top_k    = args.get("top_k", 5)
+                personal = self._search_personal(args["query"], top_k=top_k)
+                team     = self._search_team(args["query"], top_k=3)
+                if not personal and not team:
                     return json.dumps({"result": "No relevant memories found."})
-                return json.dumps({"memories": [m.get("memory", str(m)) for m in memories]})
+                result: Dict[str, Any] = {}
+                if personal:
+                    result["your_memories"] = [m.get("memory", str(m)) for m in personal]
+                if team:
+                    result["team_memories"] = [
+                        {"user": m.get("user_id", "?"), "memory": m.get("memory", str(m))}
+                        for m in team
+                    ]
+                return json.dumps(result)
 
             if tool_name == "mem0_profile":
                 memories = self._get_all()

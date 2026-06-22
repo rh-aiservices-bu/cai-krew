@@ -157,6 +157,45 @@ metadata:
   name: mem0-server
 
 ---
+# ── Mem0 API Server — NLP Extension Build (adds spaCy for entity linking) ─────
+# Chains off mem0-server:latest and installs spaCy + the en_core_web_sm model.
+# Rebuilds automatically whenever mem0-server:latest is updated.
+
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: mem0-server-nlp
+spec:
+  source:
+    type: Dockerfile
+    dockerfile: |
+      FROM mem0-server:latest
+      RUN pip install --no-cache-dir spacy && \
+          python -m spacy download en_core_web_sm
+  strategy:
+    type: Docker
+    dockerStrategy:
+      from:
+        kind: ImageStreamTag
+        name: mem0-server:latest
+  output:
+    to:
+      kind: ImageStreamTag
+      name: mem0-server-nlp:latest
+  triggers:
+    - type: ImageChange
+      imageChange:
+        from:
+          kind: ImageStreamTag
+          name: mem0-server:latest
+
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: mem0-server-nlp
+
+---
 # ── Mem0 API Server — Deployment ──────────────────────────────────────────────
 
 apiVersion: apps/v1
@@ -165,6 +204,12 @@ metadata:
   name: mem0-server
   labels:
     app: mem0-server
+  annotations:
+    image.openshift.io/triggers: |
+      [
+        {"from":{"kind":"ImageStreamTag","name":"mem0-server-nlp:latest"},"fieldPath":"spec.template.spec.initContainers[?(@.name==\"migrate\")].image"},
+        {"from":{"kind":"ImageStreamTag","name":"mem0-server-nlp:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"mem0\")].image"}
+      ]
 spec:
   replicas: 1
   selector:
@@ -181,7 +226,7 @@ spec:
           image: busybox
           command: ['sh', '-c', 'until nc -z mem0-postgres 5432; do echo waiting for postgres; sleep 2; done']
         - name: migrate
-          image: image-registry.openshift-image-registry.svc:5000/<namespace>/mem0-server:latest
+          image: mem0-server-nlp:latest
           command: ['sh', '-c', 'cd /app && alembic upgrade head']
           env:
             - name: POSTGRES_HOST
@@ -201,7 +246,7 @@ spec:
               value: /tmp
       containers:
         - name: mem0
-          image: image-registry.openshift-image-registry.svc:5000/<namespace>/mem0-server:latest
+          image: mem0-server-nlp:latest
           env:
             # PostgreSQL — individual vars the server actually reads
             - name: POSTGRES_HOST
@@ -319,6 +364,9 @@ metadata:
   name: mem0-dashboard
   labels:
     app: mem0-dashboard
+  annotations:
+    image.openshift.io/triggers: |
+      [{"from":{"kind":"ImageStreamTag","name":"mem0-dashboard:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"dashboard\")].image"}]
 spec:
   replicas: 1
   selector:
@@ -334,7 +382,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: dashboard
-          image: image-registry.openshift-image-registry.svc:5000/<namespace>/mem0-dashboard:latest
+          image: mem0-dashboard:latest
           env:
             # Browser-accessible API URL (injected into built JS at container start by entrypoint.sh)
             - name: NEXT_PUBLIC_API_URL
