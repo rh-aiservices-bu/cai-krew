@@ -32,7 +32,7 @@ MEM0_URL=http://mem0-server:8000
 # MEM0_URL=http://mem0-server.<mem0-namespace>.svc.cluster.local:8000
 
 MEM0_USER_ID=hermes-user
-MEM0_AGENT_ID=hermes
+# MEM0_AGENT_ID=hermes # Let it fetch automatically unless you want a specific name for it
 ```
 
 **2. Set the memory provider in `$HERMES_HOME/config.yaml`:**
@@ -43,6 +43,36 @@ memory:
 ```
 
 > Note: this must go in `config.yaml`, **not** `cli-config.yaml`.
+
+## Per-profile/agent setup
+
+When using Hermes with named profiles (`hermes -p <profile_name>`), each profile has its own `HERMES_HOME` at `.hermes/profiles/<profile_name>/` and does **not** inherit the global config. You must configure mem0_oss in each profile separately.
+
+**1. Copy the plugin files into the profile's plugin directory:**
+
+```bash
+mkdir -p .hermes/profiles/<profile_name>/plugins/mem0_oss
+cp __init__.py plugin.yaml .hermes/profiles/<profile_name>/plugins/mem0_oss/
+```
+
+**2. Add env vars to `.hermes/profiles/<profile_name>/.env`:**
+
+```bash
+MEM0_URL=http://mem0-server:8000
+MEM0_USER_ID=<user-id>        # the user this agent runs as
+# MEM0_AGENT_ID=<agent-id>    # optional — defaults to hermes_<profile_name>
+```
+
+**3. Add the provider to `.hermes/profiles/<profile_name>/config.yaml`:**
+
+```yaml
+memory:
+  memory_enabled: true
+  memory_char_limit: 2200
+  provider: mem0_oss
+```
+
+> Repeat this for every profile that should use mem0 memory.
 
 ## Verify it works
 

@@ -5,8 +5,12 @@ No SDK, no cloud account required.
 
 Config (env vars or ~/.hermes/.env):
   MEM0_URL      Base URL of your Mem0 server (required)
-  MEM0_USER_ID  User scope for memories (default: hermes-user)
-  MEM0_AGENT_ID Agent scope for memories (default: hermes)
+  MEM0_USER_ID  User scope for memories — falls back to Hermes's user_id kwarg (default: hermes-user)
+  MEM0_AGENT_ID Agent scope override — if not set, uses hermes_{agent_identity} (default: hermes)
+
+Scoping behaviour:
+  - Writes include user_id + agent_id + run_id (session_id from Hermes)
+  - Reads filter by user_id only → cross-session, cross-agent recall
 """
 from __future__ import annotations
 
@@ -38,6 +42,7 @@ class Mem0OssProvider(MemoryProvider):
         self._url: str = ""
         self._user_id: str = "hermes-user"
         self._agent_id: str = "hermes"
+        self._run_id: str = ""
         self._client: Optional[httpx.Client] = None
         self._lock = threading.Lock()
         self._prefetch_cache: str = ""
@@ -51,10 +56,19 @@ class Mem0OssProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs) -> None:
         self._url      = os.getenv("MEM0_URL", "").rstrip("/")
-        self._user_id  = os.getenv("MEM0_USER_ID",  "hermes-user")
-        self._agent_id = os.getenv("MEM0_AGENT_ID", "hermes")
+        self._user_id  = os.getenv("MEM0_USER_ID") or kwargs.get("user_id") or "hermes-user"
+        if os.getenv("MEM0_AGENT_ID"):
+            self._agent_id = os.getenv("MEM0_AGENT_ID")
+        elif kwargs.get("agent_identity"):
+            self._agent_id = f"hermes_{kwargs['agent_identity']}"
+        else:
+            self._agent_id = "hermes"
+        self._run_id   = session_id
         self._client   = httpx.Client(base_url=self._url, timeout=_TIMEOUT)
-        logger.info("mem0_oss: connected to %s (user=%s)", self._url, self._user_id)
+        logger.info(
+            "mem0_oss: connected to %s (user=%s, agent=%s, run=%s)",
+            self._url, self._user_id, self._agent_id, self._run_id,
+        )
 
     def shutdown(self) -> None:
         if self._client:
@@ -99,6 +113,7 @@ class Mem0OssProvider(MemoryProvider):
             "messages":  messages,
             "user_id":   self._user_id,
             "agent_id":  self._agent_id,
+            "run_id":    self._run_id,
             "infer":     infer,
         })
 
