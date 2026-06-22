@@ -1,0 +1,381 @@
+# Mem0 self-hosted deployment for OpenShift
+# Components: PostgreSQL + pgvector, Mem0 API server
+# LLM:        LiteLLM (existing cluster service, OpenAI-compatible)
+# Embeddings: Nomic-embed-text-v2-moe via LiteLLM (768 dims)
+# Neo4j:      not included — add separately when graph memory is needed
+#
+# Prerequisites:
+#   oc adm policy add-scc-to-user anyuid -z mem0-sa -n <namespace>
+#
+# Deploy:
+#   oc apply -f mem0-openshift.yaml -n <namespace>
+#   oc start-build mem0-server -n <namespace> --follow   # first time only
+#
+# Verify:
+#   ROUTE=$(oc get route mem0-server -o jsonpath='{.spec.host}')
+#   curl https://$ROUTE/auth/setup-status
+#
+# Fresh-deploy configure (run once after first build — persists in mem0_app DB):
+#   ROUTE=$(oc get route mem0-server -n <namespace> -o jsonpath='{.spec.host}')
+#   curl -X POST https://$ROUTE/configure -H "Content-Type: application/json" -d '{
+#     "vector_store": {"provider": "pgvector", "config": {
+#       "host": "mem0-postgres", "port": 5432, "dbname": "mem0",
+#       "user": "mem0", "password": "mem0pass",
+#       "collection_name": "memories", "embedding_model_dims": 768}},
+#     "llm": {"provider": "openai", "config": {
+#       "model": "Qwen3.6-35B-A3B", "api_key": "<OPENAI_API_KEY>",
+#       "openai_base_url": "https://litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com"}},
+#     "embedder": {"provider": "openai", "config": {
+#       "model": "Nomic-embed-text-v2-moe", "api_key": "<EMBEDDER_API_KEY>",
+#       "openai_base_url": "https://litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com",
+#       "embedding_dims": 768}}}'
+#   # Then drop and recreate memories table so it uses 768 dims:
+#   oc exec -n <namespace> deploy/mem0-postgres -- psql -U mem0 -d mem0 -c "DROP TABLE IF EXISTS memories;"
+#   oc rollout restart deployment/mem0-server -n <namespace>
+
+---
+# ── Secret ────────────────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mem0-config
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "mem0pass"
+  OPENAI_API_KEY: "sk-4uuTW35zlG40Ed9KbYrEbQ"
+  EMBEDDER_API_KEY: "sk-qPFttK_Gz0244SV__28qzA"
+  JWT_SECRET: "04f236ab34c98caf0993cc5c20998657e7ec7087d20342638e402ba9d22e0771"
+
+---
+# ── Service Account ───────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mem0-sa
+
+---
+# ── PostgreSQL + pgvector ─────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mem0-postgres-pvc
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mem0-postgres
+  labels:
+    app: mem0-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mem0-postgres
+  template:
+    metadata:
+      labels:
+        app: mem0-postgres
+    spec:
+      serviceAccountName: mem0-sa
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          env:
+            - name: POSTGRES_DB
+              value: mem0
+            - name: POSTGRES_USER
+              value: mem0
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mem0-config
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, mem0]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mem0-postgres-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mem0-postgres
+spec:
+  selector:
+    app: mem0-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+
+---
+# ── Mem0 API Server — Build ───────────────────────────────────────────────────
+
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: mem0-server
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/mem0ai/mem0.git
+      ref: main
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: server/dev.Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: mem0-server:latest
+
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: mem0-server
+
+---
+# ── Mem0 API Server — Deployment ──────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mem0-server
+  labels:
+    app: mem0-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mem0-server
+  template:
+    metadata:
+      labels:
+        app: mem0-server
+    spec:
+      serviceAccountName: mem0-sa
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox
+          command: ['sh', '-c', 'until nc -z mem0-postgres 5432; do echo waiting for postgres; sleep 2; done']
+        - name: migrate
+          image: image-registry.openshift-image-registry.svc:5000/<namespace>/mem0-server:latest
+          command: ['sh', '-c', 'cd /app && alembic upgrade head']
+          env:
+            - name: POSTGRES_HOST
+              value: mem0-postgres
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: mem0
+            - name: POSTGRES_USER
+              value: mem0
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mem0-config
+                  key: POSTGRES_PASSWORD
+            - name: HOME
+              value: /tmp
+      containers:
+        - name: mem0
+          image: image-registry.openshift-image-registry.svc:5000/<namespace>/mem0-server:latest
+          env:
+            # PostgreSQL — individual vars the server actually reads
+            - name: POSTGRES_HOST
+              value: mem0-postgres
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: mem0
+            - name: POSTGRES_USER
+              value: mem0
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mem0-config
+                  key: POSTGRES_PASSWORD
+            # History DB — writable path
+            - name: HISTORY_DB_PATH
+              value: /tmp/mem0-history.db
+            # LLM — LiteLLM as OpenAI-compatible backend
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mem0-config
+                  key: OPENAI_API_KEY
+            - name: OPENAI_BASE_URL
+              value: "https://litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com"
+            - name: MEM0_DEFAULT_LLM_MODEL
+              value: "Qwen3.6-35B-A3B"
+            # Dashboard CORS origin
+            - name: DASHBOARD_URL
+              value: "https://mem0-dashboard-cai-crew.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com"
+            # Misc
+            - name: HOME
+              value: /tmp
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mem0-config
+                  key: JWT_SECRET
+            - name: AUTH_DISABLED
+              value: "true"
+            - name: MEM0_TELEMETRY
+              value: "false"
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /auth/setup-status
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mem0-server
+spec:
+  selector:
+    app: mem0-server
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mem0-server
+spec:
+  to:
+    kind: Service
+    name: mem0-server
+  port:
+    targetPort: 8000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+---
+# ── Mem0 Dashboard — Build ────────────────────────────────────────────────────
+
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: mem0-dashboard
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/mem0ai/mem0.git
+      ref: main
+    contextDir: server/dashboard
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: mem0-dashboard:latest
+
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: mem0-dashboard
+
+---
+# ── Mem0 Dashboard — Deployment ───────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mem0-dashboard
+  labels:
+    app: mem0-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mem0-dashboard
+  template:
+    metadata:
+      labels:
+        app: mem0-dashboard
+    spec:
+      serviceAccountName: mem0-sa
+      securityContext:
+        runAsUser: 1001
+      containers:
+        - name: dashboard
+          image: image-registry.openshift-image-registry.svc:5000/<namespace>/mem0-dashboard:latest
+          env:
+            # Browser-accessible API URL (injected into built JS at container start by entrypoint.sh)
+            - name: NEXT_PUBLIC_API_URL
+              value: "https://mem0-server-cai-crew.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com"
+            # Server-side API URL for Next.js SSR calls
+            - name: API_INTERNAL_URL
+              value: "http://mem0-server:8000"
+            - name: NEXT_PUBLIC_INSTANCE_NAME
+              value: "Mem0"
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mem0-dashboard
+spec:
+  selector:
+    app: mem0-dashboard
+  ports:
+    - port: 3000
+      targetPort: 3000
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mem0-dashboard
+spec:
+  to:
+    kind: Service
+    name: mem0-dashboard
+  port:
+    targetPort: 3000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

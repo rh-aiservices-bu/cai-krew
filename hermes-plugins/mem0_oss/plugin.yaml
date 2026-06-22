@@ -1,0 +1,20 @@
+name: mem0_oss
+version: 1.0.0
+type: memory_provider
+description: >
+  Self-hosted Mem0 memory provider for Hermes Agent.
+  Connects directly to your Mem0 server via REST — no SDK, no cloud account.
+homepage: https://github.com/nousresearch/hermes-agent
+env_vars:
+  - key: MEM0_URL
+    description: "Base URL of your self-hosted Mem0 server (e.g. https://mem0-server.apps.example.com)"
+    secret: false
+    required: true
+  - key: MEM0_USER_ID
+    description: "User identifier for memory scoping (default: hermes-user)"
+    secret: false
+    required: false
+  - key: MEM0_AGENT_ID
+    description: "Agent identifier for memory attribution (default: hermes)"
+    secret: false
+    required: false
