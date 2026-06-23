@@ -11,10 +11,14 @@ env_vars:
     secret: false
     required: true
   - key: MEM0_USER_ID
-    description: "User identifier for memory scoping (default: hermes-user)"
+    description: "User actor ID — combined with MEM0_AGENT_ID to form the composite key for personal memories (default: hermes-user)"
     secret: false
     required: false
   - key: MEM0_AGENT_ID
-    description: "Agent identifier for memory attribution (default: hermes)"
+    description: "Agent actor ID — combined with MEM0_USER_ID to form the composite key for personal memories (default: hermes)"
+    secret: false
+    required: false
+  - key: MEM0_CUSTOM_INSTRUCTIONS
+    description: "Optional instructions injected into Mem0's fact extraction prompt (e.g. 'Only store decisions, preferences, and technical constraints')"
     secret: false
     required: false
