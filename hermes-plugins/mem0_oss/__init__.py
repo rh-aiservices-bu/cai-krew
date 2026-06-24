@@ -42,7 +42,6 @@ _CB_THRESHOLD = 5
 _CB_COOLDOWN  = 120.0
 _TEAM_SCOPE = "__team__"
 _DEDUP_THRESHOLD = 0.92
-_OTHER_ACTOR_WEIGHT = 0.5
 
 
 def _actor_key(actor_ids: list[str]) -> str:
@@ -62,7 +61,6 @@ class Mem0OssProvider(MemoryProvider):
         self._agent_id: str = "hermes"
         self._actor_key: str = ""        # composite key for personal memories
         self._run_id: str = ""
-        self._custom_instructions: Optional[str] = None
         self._client: Optional[httpx.Client] = None
         self._write_client: Optional[httpx.Client] = None
         self._lock = threading.Lock()
@@ -148,10 +146,13 @@ class Mem0OssProvider(MemoryProvider):
 
     def _search_other_actors(self, query: str, top_k: int = 3) -> List[Dict]:
         """Personal memories from other users — surfaced at lower weight."""
-        data = self._request("POST", "/search", json={
-            "query":  query,
-            "top_k":  top_k * 3,
-        })
+        try:
+            data = self._request("POST", "/search", json={
+                "query":  query,
+                "top_k":  top_k * 3,
+            })
+        except Exception:
+            return []
         results = data if isinstance(data, list) else data.get("results", [])
         return [
             m for m in results
@@ -282,7 +283,31 @@ It is correct and expected to return nothing most of the time."""
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         with self._lock:
             result, self._prefetch_cache = self._prefetch_cache, ""
-        return result
+        if result and result.strip():
+            return result
+        # Turn 1 fallback: cache is empty because nothing was queued before the
+        # first message. Run searches inline and return directly so turn 1 gets context.
+        try:
+            sections = []
+            personal = self._search_personal(query, top_k=5)
+            if personal:
+                lines = "\n".join(f"- {m.get('memory', m)}" for m in personal)
+                sections.append(f"## Your memories:\n{lines}")
+            team = self._search_team(query, top_k=3)
+            if team:
+                lines = "\n".join(f"- {m.get('memory', m)}" for m in team)
+                sections.append(f"## Team memories:\n{lines}")
+            other = self._search_other_actors(query, top_k=3)
+            if other:
+                lines = "\n".join(
+                    f"- [{m.get('user_id', '?')}] {m.get('memory', m)}" for m in other
+                )
+                sections.append(f"## Other memories (lower confidence):\n{lines}")
+            if sections:
+                return "\n\n".join(sections)
+        except Exception as exc:
+            logger.debug("mem0_oss sync prefetch fallback failed: %s", exc)
+        return ""
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         threading.Thread(target=self._bg_prefetch, args=(query,), daemon=True).start()
@@ -451,5 +476,5 @@ It is correct and expected to return nothing most of the time."""
         raise NotImplementedError(tool_name)
 
 
-def register():
-    return Mem0OssProvider
+def register(collector) -> None:
+    collector.register_memory_provider(Mem0OssProvider())
