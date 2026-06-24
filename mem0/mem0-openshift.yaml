@@ -139,12 +139,28 @@ spec:
   source:
     type: Git
     git:
-      uri: https://github.com/mem0ai/mem0.git
+      uri: https://github.com/RHRolun/mem0.git
       ref: main
+    dockerfile: |
+      FROM python:3.12
+      WORKDIR /app
+      RUN curl -sSL https://install.python-poetry.org | python3 -
+      ENV PATH="/root/.local/bin:$PATH"
+      COPY server/requirements.txt .
+      RUN pip install -r requirements.txt
+      WORKDIR /app/packages
+      COPY pyproject.toml .
+      COPY poetry.lock .
+      COPY README.md .
+      COPY mem0 ./mem0
+      RUN pip install -e .[graph]
+      WORKDIR /app
+      COPY server .
+      RUN pip install --no-cache-dir spacy && \
+          python -m spacy download en_core_web_sm
+      CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
   strategy:
     type: Docker
-    dockerStrategy:
-      dockerfilePath: server/dev.Dockerfile
   output:
     to:
       kind: ImageStreamTag
@@ -155,45 +171,6 @@ apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
   name: mem0-server
-
----
-# ── Mem0 API Server — NLP Extension Build (adds spaCy for entity linking) ─────
-# Chains off mem0-server:latest and installs spaCy + the en_core_web_sm model.
-# Rebuilds automatically whenever mem0-server:latest is updated.
-
-apiVersion: build.openshift.io/v1
-kind: BuildConfig
-metadata:
-  name: mem0-server-nlp
-spec:
-  source:
-    type: Dockerfile
-    dockerfile: |
-      FROM mem0-server:latest
-      RUN pip install --no-cache-dir spacy && \
-          python -m spacy download en_core_web_sm
-  strategy:
-    type: Docker
-    dockerStrategy:
-      from:
-        kind: ImageStreamTag
-        name: mem0-server:latest
-  output:
-    to:
-      kind: ImageStreamTag
-      name: mem0-server-nlp:latest
-  triggers:
-    - type: ImageChange
-      imageChange:
-        from:
-          kind: ImageStreamTag
-          name: mem0-server:latest
-
----
-apiVersion: image.openshift.io/v1
-kind: ImageStream
-metadata:
-  name: mem0-server-nlp
 
 ---
 # ── Mem0 API Server — Deployment ──────────────────────────────────────────────
@@ -207,8 +184,8 @@ metadata:
   annotations:
     image.openshift.io/triggers: |
       [
-        {"from":{"kind":"ImageStreamTag","name":"mem0-server-nlp:latest"},"fieldPath":"spec.template.spec.initContainers[?(@.name==\"migrate\")].image"},
-        {"from":{"kind":"ImageStreamTag","name":"mem0-server-nlp:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"mem0\")].image"}
+        {"from":{"kind":"ImageStreamTag","name":"mem0-server:latest"},"fieldPath":"spec.template.spec.initContainers[?(@.name==\"migrate\")].image"},
+        {"from":{"kind":"ImageStreamTag","name":"mem0-server:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"mem0\")].image"}
       ]
 spec:
   replicas: 1
@@ -226,7 +203,7 @@ spec:
           image: busybox
           command: ['sh', '-c', 'until nc -z mem0-postgres 5432; do echo waiting for postgres; sleep 2; done']
         - name: migrate
-          image: mem0-server-nlp:latest
+          image: mem0-server:latest
           command: ['sh', '-c', 'cd /app && alembic upgrade head']
           env:
             - name: POSTGRES_HOST
@@ -246,7 +223,7 @@ spec:
               value: /tmp
       containers:
         - name: mem0
-          image: mem0-server-nlp:latest
+          image: mem0-server:latest
           env:
             # PostgreSQL — individual vars the server actually reads
             - name: POSTGRES_HOST
@@ -339,7 +316,7 @@ spec:
   source:
     type: Git
     git:
-      uri: https://github.com/mem0ai/mem0.git
+      uri: https://github.com/RHRolun/mem0.git
       ref: main
     contextDir: server/dashboard
   strategy:
