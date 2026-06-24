@@ -4,20 +4,21 @@ Connects directly to a self-hosted Mem0 server via REST.
 No SDK, no cloud account required.
 
 Config (env vars or ~/.hermes/.env):
-  MEM0_URL                 Base URL of your Mem0 server (required)
-  MEM0_USER_ID             User actor ID — falls back to Hermes's user_id kwarg (default: hermes-user)
-  MEM0_AGENT_ID            Agent actor ID — falls back to hermes_{agent_identity} (default: hermes)
-  MEM0_CUSTOM_INSTRUCTIONS Optional instructions injected into Mem0's fact extraction prompt
+  MEM0_URL                    Base URL of your Mem0 server (required)
+  MEM0_USER_ID                User actor ID — falls back to Hermes's user_id kwarg (default: hermes-user)
+  MEM0_AGENT_ID               Agent actor ID — falls back to agent_identity kwarg (default: hermes)
+  MEM0_CUSTOM_INSTRUCTIONS    Optional extra instructions appended to the auto-generated extraction prompt
 
-Scoping:
-  Personal memories are keyed by a composite of all actor IDs (sorted, joined by |).
-  Team memories use user_id="__team__" and are always included in search results.
-  Other actors' memories are surfaced at lower weight (0.5) for natural knowledge sharing.
+Storage model:
+  user_id  = the human user (e.g. "Erwan") — who the memory belongs to
+  agent_id = the scope:
+               personal → composite actor key  (e.g. "agent:hermes|user:Erwan")
+               team     → "__team__"
 
 Search tiers (highest to lowest weight):
-  1. Same actor set  — weight 1.0
-  2. Team scope      — weight 1.0
-  3. Other actors    — weight 0.5
+  1. Personal (same actor set)  — agent_id=actor_key,  weight 1.0
+  2. Team                       — agent_id=__team__,   weight 1.0
+  3. Other actors               — global, exclude own + team, weight 0.5
 """
 from __future__ import annotations
 
@@ -35,10 +36,11 @@ from agent.memory_provider import MemoryProvider
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT = 10.0
+_TIMEOUT       = 10.0   # read operations (search, get)
+_WRITE_TIMEOUT = 90.0   # write operations (add) — LLM extraction can take 30–60 s
 _CB_THRESHOLD = 5
 _CB_COOLDOWN  = 120.0
-_TEAM_USER_ID = "__team__"
+_TEAM_SCOPE = "__team__"
 _DEDUP_THRESHOLD = 0.92
 _OTHER_ACTOR_WEIGHT = 0.5
 
@@ -62,8 +64,10 @@ class Mem0OssProvider(MemoryProvider):
         self._run_id: str = ""
         self._custom_instructions: Optional[str] = None
         self._client: Optional[httpx.Client] = None
+        self._write_client: Optional[httpx.Client] = None
         self._lock = threading.Lock()
         self._prefetch_cache: str = ""
+        self._extra_instructions: str = ""
         self._cb_failures: int = 0
         self._cb_tripped_at: float = 0.0
 
@@ -82,9 +86,10 @@ class Mem0OssProvider(MemoryProvider):
         else:
             self._agent_id = "hermes"
         self._actor_key   = _actor_key([self._user_id, self._agent_id])
-        self._run_id      = session_id
-        self._custom_instructions = os.getenv("MEM0_CUSTOM_INSTRUCTIONS") or None
-        self._client      = httpx.Client(base_url=self._url, timeout=_TIMEOUT)
+        self._run_id             = session_id
+        self._extra_instructions = os.getenv("MEM0_CUSTOM_INSTRUCTIONS") or ""
+        self._client             = httpx.Client(base_url=self._url, timeout=_TIMEOUT)
+        self._write_client       = httpx.Client(base_url=self._url, timeout=_WRITE_TIMEOUT)
         logger.info(
             "mem0_oss: connected to %s (actors=%s, run=%s)",
             self._url, self._actor_key, self._run_id,
@@ -93,6 +98,8 @@ class Mem0OssProvider(MemoryProvider):
     def shutdown(self) -> None:
         if self._client:
             self._client.close()
+        if self._write_client:
+            self._write_client.close()
 
     # ── Circuit breaker ──────────────────────────────────────────────────────
 
@@ -103,11 +110,12 @@ class Mem0OssProvider(MemoryProvider):
             self._cb_failures = 0
         return True
 
-    def _request(self, method: str, path: str, **kwargs) -> Any:
+    def _request(self, method: str, path: str, *, _write: bool = False, **kwargs) -> Any:
         if not self._cb_ok():
             raise RuntimeError("mem0 circuit breaker open")
+        client = self._write_client if _write else self._client
         try:
-            r = self._client.request(method, path, **kwargs)
+            r = client.request(method, path, **kwargs)
             r.raise_for_status()
             self._cb_failures = 0
             return r.json()
@@ -121,40 +129,108 @@ class Mem0OssProvider(MemoryProvider):
     # ── Memory helpers ───────────────────────────────────────────────────────
 
     def _search_personal(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Memories from the exact same actor set — highest relevance."""
-        body: Dict[str, Any] = {
+        """Memories for this exact user+actor-set pair."""
+        data = self._request("POST", "/search", json={
             "query":   query,
-            "filters": {"user_id": self._actor_key},
+            "filters": {"user_id": self._user_id, "agent_id": self._actor_key},
             "top_k":   top_k,
-        }
-        data = self._request("POST", "/search", json=body)
+        })
         return data if isinstance(data, list) else data.get("results", [])
 
     def _search_team(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Team-scoped memories — always included, same weight as personal."""
-        body: Dict[str, Any] = {
+        """Team-scoped memories — shared across all actors."""
+        data = self._request("POST", "/search", json={
             "query":   query,
-            "filters": {"user_id": _TEAM_USER_ID},
+            "filters": {"agent_id": _TEAM_SCOPE},
             "top_k":   top_k,
-        }
-        data = self._request("POST", "/search", json=body)
+        })
         return data if isinstance(data, list) else data.get("results", [])
 
     def _search_other_actors(self, query: str, top_k: int = 3) -> List[Dict]:
-        """Memories from other actor pairs — surfaced at lower weight."""
-        data = self._request("POST", "/search", json={"query": query, "top_k": top_k * 3})
+        """Personal memories from other users — surfaced at lower weight."""
+        data = self._request("POST", "/search", json={
+            "query":  query,
+            "top_k":  top_k * 3,
+        })
         results = data if isinstance(data, list) else data.get("results", [])
         return [
             m for m in results
-            if m.get("user_id") not in (self._actor_key, _TEAM_USER_ID)
+            if not (
+                m.get("user_id") == self._user_id and m.get("agent_id") == self._actor_key
+            ) and m.get("agent_id") != _TEAM_SCOPE
         ][:top_k]
 
-    def _add(self, messages: List[Dict], scope: str = "personal", infer: bool = True) -> None:
-        user_id = _TEAM_USER_ID if scope == "team" else self._actor_key
+    def _extraction_prompt(self) -> str:
+        """Custom instructions for personal memory extraction — uses real actor names."""
+        u = self._user_id
+        a = self._agent_id
+        prompt = f"""\
+IDENTITY (highest priority — overrides all default naming conventions):
+- The "user" role in this conversation is a person named {u!r}. \
+ALWAYS use '{u}' as the subject. NEVER write 'User', 'the user', or any pronoun as a standalone subject.
+- The "assistant" role in this conversation is an AI agent named {a!r}. \
+ALWAYS use '{a}' when referring to the assistant. NEVER write 'the assistant' or 'Assistant'.
+
+ATTRIBUTION RULES:
+- Every extracted memory MUST name its subject explicitly: start with '{u}' or '{a}', never 'User' or 'they'.
+- When {u} states a personal fact, preference, or experience: "{u} <fact>." (e.g. "{u} likes apples.")
+- When {a} makes a recommendation or provides information to {u}: \
+"{a} recommended ... to {u}" or "{u} was told by {a} that ..."
+- When {u} explicitly shares something with {a} in conversation: \
+"{u} told {a} that ..." is preferred.
+
+EXAMPLES:
+  BAD  → "User likes hiking."          GOOD → "{u} likes hiking."
+  BAD  → "The user prefers tea."       GOOD → "{u} prefers tea."
+  BAD  → "User was recommended Python." GOOD → "{a} recommended Python to {u}."
+  BAD  → "They enjoy reading."         GOOD → "{u} enjoys reading.\""""
+        if self._extra_instructions:
+            prompt += f"\n\nADDITIONAL INSTRUCTIONS:\n{self._extra_instructions}"
+        return prompt
+
+    def _team_extraction_prompt(self) -> str:
+        """Custom instructions for team memory extraction.
+
+        Instructs the LLM to only extract facts that are relevant to the whole
+        team — project decisions, technical standards, shared processes, etc.
+        Personal facts are explicitly excluded. If nothing team-relevant is
+        present the LLM should return an empty list, so no team memory is stored.
+        """
+        u = self._user_id
+        return f"""\
+TEAM MEMORY SCOPE (highest priority):
+You are extracting memories for a SHARED TEAM knowledge base visible to everyone.
+
+ONLY extract facts that are broadly relevant to the whole team, such as:
+- Project or product decisions, requirements, priorities, or milestones
+- Technical standards, architecture choices, tooling, or conventions
+- Company or team processes, policies, workflows, or resources
+- Domain knowledge or context that multiple team members would benefit from knowing
+- Decisions or agreements reached in this conversation that affect the team
+
+DO NOT extract:
+- Personal preferences, habits, or individual experiences (e.g. "{u} likes apples" → skip)
+- Facts that are only relevant to the person speaking
+- Generic small talk or transient conversational details
+
+ATTRIBUTION: When a fact was contributed by {u!r}, write "{u} noted that ..." \
+or "{u} decided that ...". Do not write 'User' or 'the user'.
+
+If no team-relevant facts are present in this conversation, return an empty memory list. \
+It is correct and expected to return nothing most of the time."""
+
+    def _add(
+        self,
+        messages: List[Dict],
+        scope: str = "personal",
+        infer: bool = True,
+        prompt: Optional[str] = None,
+    ) -> bool:
+        """Store memories. Returns True if at least one memory was saved."""
         body: Dict[str, Any] = {
             "messages": messages,
-            "user_id":  user_id,
-            "agent_id": self._agent_id,
+            "user_id":  self._user_id,
+            "agent_id": _TEAM_SCOPE if scope == "team" else self._actor_key,
             "run_id":   self._run_id,
             "infer":    infer,
             "metadata": {
@@ -163,13 +239,22 @@ class Mem0OssProvider(MemoryProvider):
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         }
-        if self._custom_instructions:
-            body["custom_instructions"] = self._custom_instructions
-        self._request("POST", "/memories", json=body)
+        if infer:
+            body["prompt"] = prompt or self._extraction_prompt()
+        data = self._request("POST", "/memories", json=body, _write=True)
+        results = data.get("results", []) if isinstance(data, dict) else (data or [])
+        return bool(results)
 
     def _get_all(self) -> List[Dict]:
-        data = self._request("GET", "/memories", params={"user_id": self._actor_key})
+        data = self._request("GET", "/memories", params={
+            "user_id":  self._user_id,
+            "agent_id": self._actor_key,
+        })
         return data if isinstance(data, list) else data.get("results", [])
+
+    def _delete(self, memory_id: str) -> None:
+        self._request("DELETE", f"/memories/{memory_id}")
+
 
     def _already_known(self, content: str) -> bool:
         """Skip save if Mem0 already has a highly similar memory for these actors."""
@@ -242,16 +327,35 @@ class Mem0OssProvider(MemoryProvider):
         ).start()
 
     def _bg_sync(self, user_msg: str, asst_msg: str) -> None:
+        messages = [
+            {"role": "user",      "content": user_msg},
+            {"role": "assistant", "content": asst_msg},
+        ]
+
+        # Try team extraction first. If something team-relevant is found and
+        # stored, skip personal storage — the fact belongs to the team, not the
+        # individual. Only fall through to personal if the team LLM returns empty
+        # or if the team call fails (fail-safe: always store something).
         try:
-            if self._already_known(user_msg):
-                logger.debug("mem0_oss: skipping duplicate memory")
-                return
-            self._add([
-                {"role": "user",      "content": user_msg},
-                {"role": "assistant", "content": asst_msg},
-            ])
+            stored_as_team = self._add(
+                messages, scope="team", prompt=self._team_extraction_prompt()
+            )
         except Exception as exc:
-            logger.debug("mem0_oss sync failed: %s", exc)
+            logger.debug("mem0_oss team sync failed: %s", exc)
+            stored_as_team = False
+
+        if stored_as_team:
+            logger.debug("mem0_oss: stored as team memory, skipping personal")
+            return
+
+        # Nothing team-relevant — store as personal
+        try:
+            if not self._already_known(user_msg):
+                self._add(messages, scope="personal")
+            else:
+                logger.debug("mem0_oss: skipping duplicate personal memory")
+        except Exception as exc:
+            logger.debug("mem0_oss personal sync failed: %s", exc)
 
     # ── Tools ────────────────────────────────────────────────────────────────
 
@@ -278,25 +382,28 @@ class Mem0OssProvider(MemoryProvider):
                 "description": "Retrieve all stored memories for the current actor pair.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
             },
-            {
-                "name": "mem0_conclude",
-                "description": (
-                    "Store a specific fact verbatim (skips LLM extraction). "
-                    "Use scope='team' to share with the whole team."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "fact":  {"type": "string", "description": "The fact to store"},
-                        "scope": {
-                            "type": "string",
-                            "enum": ["personal", "team"],
-                            "description": "personal (default) or team",
-                        },
-                    },
-                    "required": ["fact"],
-                },
-            },
+            # mem0_conclude: store a specific fact verbatim (infer=False), bypassing LLM extraction.
+            # Kept for cases where the agent needs to force-store a derived conclusion not said
+            # in the conversation. Background sync handles most storage automatically.
+            # {
+            #     "name": "mem0_conclude",
+            #     "description": (
+            #         "Store a specific fact verbatim (skips LLM extraction). "
+            #         "Use scope='team' to share with the whole team."
+            #     ),
+            #     "parameters": {
+            #         "type": "object",
+            #         "properties": {
+            #             "fact":  {"type": "string", "description": "The fact to store"},
+            #             "scope": {
+            #                 "type": "string",
+            #                 "enum": ["personal", "team"],
+            #                 "description": "personal (default) or team",
+            #             },
+            #         },
+            #         "required": ["fact"],
+            #     },
+            # },
         ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
@@ -326,14 +433,14 @@ class Mem0OssProvider(MemoryProvider):
                     return json.dumps({"result": "No memories stored yet."})
                 return json.dumps({"memories": [m.get("memory", str(m)) for m in memories]})
 
-            if tool_name == "mem0_conclude":
-                scope = args.get("scope", "personal")
-                self._add(
-                    [{"role": "user", "content": args["fact"]}],
-                    scope=scope,
-                    infer=False,
-                )
-                return json.dumps({"result": f"Memory stored ({scope})."})
+            # if tool_name == "mem0_conclude":
+            #     scope = args.get("scope", "personal")
+            #     self._add(
+            #         [{"role": "user", "content": args["fact"]}],
+            #         scope=scope,
+            #         infer=False,
+            #     )
+            #     return json.dumps({"result": f"Memory stored ({scope})."})
 
         except RuntimeError:
             return json.dumps({"error": "Memory service temporarily unavailable."})

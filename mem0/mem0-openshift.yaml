@@ -316,6 +316,8 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: mem0-server
+  annotations:
+    haproxy.router.openshift.io/timeout: 120s
 spec:
   to:
     kind: Service
