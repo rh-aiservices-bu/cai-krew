@@ -1,8 +1,0 @@
-{
-  "gitea_url": "https://gitea-gitea.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com",
-  "owner": "user1",
-  "repo": "pensieve",
-  "token": "656eab53d8560cbc99d590a42640b1e0583bf386",
-  "token_name": "rlundber-token",
-  "repo_url": "https://gitea-gitea.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com/user1/pensieve.git"
-}
