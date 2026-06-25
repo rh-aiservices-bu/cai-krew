@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""Claude Code Stop hook: sync last conversation turn to mem0.
+"""Claude Code Stop hook: queue last conversation turn for async mem0 sync.
 
-Fires after each response. Reads the last user+assistant turn from
-the session JSONL and calls sync_turn() to store memories.
-
-Note: sync_turn() blocks until mem0 LLM extraction completes (~30-60s).
-This is Option A (synchronous). The session will appear "done" only after
-the sync completes. Upgrade to Option B (background cache) to avoid this.
+Writes the turn to ~/.claude/mem0_queue/ and returns immediately.
+A background daemon (mem0_daemon.py) handles the actual sync_turn() call.
 
 Configuration (create ~/.claude/mem0.env):
     MEM0_URL=https://your-mem0-server.example.com
@@ -17,10 +13,16 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+QUEUE_DIR = Path.home() / ".claude" / "mem0_queue"
+PID_FILE  = Path.home() / ".claude" / "mem0_daemon.pid"
+DAEMON    = Path(__file__).parent / "mem0_daemon.py"
 
 
 def _load_env_file(path: Path) -> None:
@@ -42,24 +44,17 @@ def _find_session_jsonl(session_id: str) -> Path | None:
 
 
 def _extract_text(content) -> str:
-    """Extract plain text from a message content field (string or list of blocks)."""
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):
-        parts = []
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "text":
-                parts.append(block.get("text", ""))
-            elif block.get("type") == "thinking":
-                pass  # skip thinking blocks
-        return " ".join(parts).strip()
+        return " ".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ).strip()
     return ""
 
 
 def _get_last_turn(jsonl_path: Path) -> tuple[str | None, str | None]:
-    """Return (user_msg, assistant_msg) for the last complete turn."""
     entries = []
     for line in jsonl_path.read_text(errors="replace").splitlines():
         try:
@@ -69,12 +64,11 @@ def _get_last_turn(jsonl_path: Path) -> tuple[str | None, str | None]:
         if entry.get("type") in ("user", "assistant"):
             entries.append(entry)
 
-    # Walk backwards: find last assistant text, then its preceding user text
     asst_text: str | None = None
     user_text: str | None = None
 
     for entry in reversed(entries):
-        etype = entry.get("type")
+        etype   = entry.get("type")
         content = entry.get("message", {}).get("content", "")
 
         if asst_text is None and etype == "assistant":
@@ -83,12 +77,32 @@ def _get_last_turn(jsonl_path: Path) -> tuple[str | None, str | None]:
                 asst_text = text
 
         elif asst_text is not None and etype == "user":
-            # Only accept plain-string content (real user message, not tool result)
             if isinstance(content, str) and content.strip():
                 user_text = content.strip()
                 break
 
     return user_text, asst_text
+
+
+def _daemon_running() -> bool:
+    if not PID_FILE.exists():
+        return False
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        os.kill(pid, 0)  # signal 0 = check existence only
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _start_daemon() -> None:
+    subprocess.Popen(
+        [sys.executable, str(DAEMON)],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def main() -> None:
@@ -114,13 +128,18 @@ def main() -> None:
     if not user_msg or not asst_msg:
         sys.exit(0)
 
-    try:
-        from mem0_client import Mem0Client  # noqa: PLC0415
+    # Write task to queue
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    task_file = QUEUE_DIR / f"{int(time.time() * 1000)}_{session_id[:8]}.json"
+    task_file.write_text(json.dumps({
+        "user_msg":   user_msg,
+        "asst_msg":   asst_msg,
+        "session_id": session_id,
+    }))
 
-        client = Mem0Client.from_env(agent_id="claude-code", run_id=session_id)
-        client.sync_turn(user_msg, asst_msg)
-    except Exception:
-        pass
+    # Ensure daemon is running
+    if not _daemon_running():
+        _start_daemon()
 
     sys.exit(0)
 

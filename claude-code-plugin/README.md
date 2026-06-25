@@ -3,7 +3,8 @@
 Adds long-term memory to Claude Code via two hooks:
 
 - **`mem0_prefetch.py`** (`UserPromptSubmit`) — searches mem0 and injects relevant memories before each LLM call
-- **`mem0_sync.py`** (`Stop`) — stores the last conversation turn to mem0 after each response
+- **`mem0_sync.py`** (`Stop`) — queues the last conversation turn for async sync, returns immediately
+- **`mem0_daemon.py`** — background process that drains the queue and calls `sync_turn()` (auto-started by the Stop hook)
 
 ## Setup
 
@@ -50,6 +51,7 @@ Add to `~/.claude/settings.json` (global — all projects):
 ```
 
 Or add to `<project>/.claude/settings.json` for project-scoped activation only.
+Both levels can coexist — they merge, not override.
 
 ### 3. Install dependency
 
@@ -57,7 +59,8 @@ Or add to `<project>/.claude/settings.json` for project-scoped activation only.
 pip install httpx
 ```
 
-`mem0_client` (the library these hooks use) must be present one directory above `claude-code-plugin/`. When distributing this plugin to a new machine, copy both `claude-code-plugin/` and `mem0_client/` to the same parent directory.
+`mem0_client` (the library these hooks use) must be present one directory above `claude-code-plugin/`.
+When distributing to a new machine, copy both `claude-code-plugin/` and `mem0_client/` to the same parent directory.
 
 ## How it works
 
@@ -69,17 +72,29 @@ User types message
 
 Claude responds
   → Stop hook fires
-  → mem0_sync.py reads last user+assistant turn from session JSONL
-  → Calls sync_turn(): tries team extraction first, falls back to personal
-  → mem0 LLM extracts and stores relevant facts (~30-60s, blocks until done)
+  → mem0_sync.py writes turn to ~/.claude/mem0_queue/<timestamp>.json
+  → Starts mem0_daemon.py if not already running
+  → Exits immediately (non-blocking)
+
+Background (mem0_daemon.py)
+  → Polls ~/.claude/mem0_queue/ every 5 seconds
+  → Calls sync_turn() for each queued task (~30-60s per turn)
+  → Deletes task file when done
+  → Exits after 5 minutes idle (restarted automatically on next turn)
 ```
 
-## Known limitation
+## Files created at runtime
 
-The `Stop` hook is **synchronous** — each response is followed by a pause while mem0 extracts memories. This is Option A. Option B (background process + cache file) eliminates the delay and can be built on top of this foundation.
+| Path | Purpose |
+|------|---------|
+| `~/.claude/mem0.env` | Credentials config |
+| `~/.claude/mem0_queue/` | Pending sync tasks (one JSON file per turn) |
+| `~/.claude/mem0_daemon.pid` | Daemon PID (for alive-check) |
+| `~/.claude/mem0_daemon.log` | Daemon log output |
 
 ## Troubleshooting
 
-- **No memory context injected**: check that `MEM0_URL` is set in `~/.claude/mem0.env` and the server is reachable
-- **Hook not firing**: verify the path in `settings.json` matches where the scripts actually live
+- **No memory context injected**: check `MEM0_URL` in `~/.claude/mem0.env` and that the server is reachable
+- **Hook not firing**: verify the path in `settings.json` matches the scripts' actual location
 - **Import error**: confirm `mem0_client/` exists one level above `claude-code-plugin/`
+- **Sync not happening**: check `~/.claude/mem0_daemon.log` for errors; check if tasks pile up in `~/.claude/mem0_queue/`
