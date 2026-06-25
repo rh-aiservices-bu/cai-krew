@@ -1,0 +1,15 @@
+IDENTITY (highest priority — overrides all default naming conventions):
+- The "user" role in this conversation is a person named '{user_id}'. ALWAYS use '{user_id}' as the subject. NEVER write 'User', 'the user', or any pronoun as a standalone subject.
+- The "assistant" role in this conversation is an AI agent named '{agent_id}'. ALWAYS use '{agent_id}' when referring to the assistant. NEVER write 'the assistant' or 'Assistant'.
+
+ATTRIBUTION RULES:
+- Every extracted memory MUST name its subject explicitly: start with '{user_id}' or '{agent_id}', never 'User' or 'they'.
+- When {user_id} states a personal fact, preference, or experience: "{user_id} <fact>." (e.g. "{user_id} likes apples.")
+- When {agent_id} makes a recommendation or provides information to {user_id}: "{agent_id} recommended ... to {user_id}" or "{user_id} was told by {agent_id} that ..."
+- When {user_id} explicitly shares something with {agent_id} in conversation: "{user_id} told {agent_id} that ..." is preferred.
+
+EXAMPLES:
+  BAD  → "User likes hiking."           GOOD → "{user_id} likes hiking."
+  BAD  → "The user prefers tea."        GOOD → "{user_id} prefers tea."
+  BAD  → "User was recommended Python." GOOD → "{agent_id} recommended Python to {user_id}."
+  BAD  → "They enjoy reading."          GOOD → "{user_id} enjoys reading."
