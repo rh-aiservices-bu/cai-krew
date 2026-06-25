@@ -1,0 +1,57 @@
+# Memory overseer CronJob — runs daily at 02:00, prints pruning report to logs.
+# v1: report-only. No changes are written to mem0.
+#
+# Deploy:
+#   oc apply -f cronjob.yaml -n <namespace>
+#
+# Trigger manually:
+#   oc create job --from=cronjob/memory-overseer memory-overseer-manual -n <namespace>
+#
+# View last run logs:
+#   oc logs job/memory-overseer-manual -n <namespace>
+#
+# Required before first deploy:
+#   1. Build the image:
+#        oc new-build --binary --name=memory-overseer -n <namespace>
+#        oc start-build memory-overseer --from-dir=. --follow -n <namespace>
+#   2. Set MEM0_ACTOR_KEYS below to the actor keys you want to analyze.
+#      Actor keys are the composite keys stored as agent_id in personal memories,
+#      e.g. "hermes|alice" for user alice talking to the hermes agent.
+#      Check existing memories via:
+#        curl "$MEM0_URL/memories?agent_id=__team__" | jq '.[].agent_id' | sort -u
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: memory-overseer
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid        # skip if previous run is still going
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: memory-overseer
+            image: image-registry.openshift-image-registry.svc:5000/<namespace>/memory-overseer:latest
+            env:
+            - name: MEM0_URL
+              value: "https://mem0-server-<namespace>.apps.<cluster-domain>"
+            - name: LITELLM_URL
+              value: "<LITEMASS-URL>"
+            - name: LITELLM_MODEL
+              value: "Qwen3.6-35B-A3B"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mem0-config
+                  key: OPENAI_API_KEY
+            # Optional: restrict analysis to specific actor keys.
+            # When omitted, actor keys are discovered automatically via GET /memories.
+            # To restrict: set to a comma-separated list, e.g. "hermes|alice,hermes|bob"
+            # - name: MEM0_ACTOR_KEYS
+            #   value: ""
