@@ -24,11 +24,11 @@
 #       "collection_name": "memories", "embedding_model_dims": 768}},
 #     "llm": {"provider": "openai", "config": {
 #       "model": "Qwen3.6-35B-A3B", "api_key": "<OPENAI_API_KEY>",
-#       "openai_base_url": "https://litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com"}},
+#       "openai_base_url": "https://<litellm-route>"}},
 #     "embedder": {"provider": "openai", "config": {
-#       "model": "Nomic-embed-text-v2-moe", "api_key": "<EMBEDDER_API_KEY>",
-#       "openai_base_url": "https://litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com",
-#       "embedding_dims": 768}}}'
+#       "model": "/mnt/models", "api_key": "<EMBEDDER_API_KEY>",
+#       "openai_base_url": "https://<embedder-route>/v1"}}}'
+#   # Note: do NOT include embedding_dims in the embedder block — nomic rejects the dimensions parameter.
 #   # Then drop and recreate memories table so it uses 768 dims:
 #   oc exec -n <namespace> deploy/mem0-postgres -- psql -U mem0 -d mem0 -c "DROP TABLE IF EXISTS memories;"
 #   oc rollout restart deployment/mem0-server -n <namespace>
@@ -42,10 +42,10 @@ metadata:
   name: mem0-config
 type: Opaque
 stringData:
-  POSTGRES_PASSWORD: "mem0pass"
-  OPENAI_API_KEY: "sk-4uuTW35zlG40Ed9KbYrEbQ"
-  EMBEDDER_API_KEY: "sk-qPFttK_Gz0244SV__28qzA"
-  JWT_SECRET: "04f236ab34c98caf0993cc5c20998657e7ec7087d20342638e402ba9d22e0771"
+  POSTGRES_PASSWORD: "<your-postgres-password>"
+  OPENAI_API_KEY: "<your-litellm-api-key>"
+  EMBEDDER_API_KEY: "<your-embedder-api-key>"
+  JWT_SECRET: "<random-hex-secret>"
 
 ---
 # ── Service Account ───────────────────────────────────────────────────────────
@@ -57,7 +57,20 @@ metadata:
 
 ---
 # ── PostgreSQL + pgvector ─────────────────────────────────────────────────────
+# Two databases are needed:
+#   mem0      — pgvector store (memories, vectors)
+#   mem0_app  — mem0 application state (Alembic migrations, users, config)
+# POSTGRES_DB creates "mem0" automatically; the ConfigMap init script creates "mem0_app".
 
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mem0-postgres-init
+data:
+  init.sql: |
+    CREATE DATABASE mem0_app;
+
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -106,6 +119,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
           readinessProbe:
             exec:
               command: [pg_isready, -U, mem0]
@@ -115,6 +130,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: mem0-postgres-pvc
+        - name: init-scripts
+          configMap:
+            name: mem0-postgres-init
 
 ---
 apiVersion: v1
@@ -139,7 +157,7 @@ spec:
   source:
     type: Git
     git:
-      uri: https://github.com/RHRolun/mem0.git
+      uri: https://github.com/<your-org>/mem0.git
       ref: main
     dockerfile: |
       FROM python:3.12
@@ -219,6 +237,8 @@ spec:
                 secretKeyRef:
                   name: mem0-config
                   key: POSTGRES_PASSWORD
+            - name: APP_DB_NAME
+              value: mem0_app
             - name: HOME
               value: /tmp
       containers:
@@ -249,12 +269,12 @@ spec:
                   name: mem0-config
                   key: OPENAI_API_KEY
             - name: OPENAI_BASE_URL
-              value: "https://litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com"
+              value: "https://<litellm-route>"
             - name: MEM0_DEFAULT_LLM_MODEL
               value: "Qwen3.6-35B-A3B"
             # Dashboard CORS origin
             - name: DASHBOARD_URL
-              value: "https://mem0-dashboard-cai-crew.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com"
+              value: "https://<mem0-dashboard-route>"
             # Misc
             - name: HOME
               value: /tmp
@@ -316,7 +336,7 @@ spec:
   source:
     type: Git
     git:
-      uri: https://github.com/RHRolun/mem0.git
+      uri: https://github.com/<your-org>/mem0.git
       ref: main
     contextDir: server/dashboard
   strategy:
@@ -365,7 +385,7 @@ spec:
           env:
             # Browser-accessible API URL (injected into built JS at container start by entrypoint.sh)
             - name: NEXT_PUBLIC_API_URL
-              value: "https://mem0-server-cai-crew.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com"
+              value: "https://<mem0-server-route>"
             # Server-side API URL for Next.js SSR calls
             - name: API_INTERNAL_URL
               value: "http://mem0-server:8000"

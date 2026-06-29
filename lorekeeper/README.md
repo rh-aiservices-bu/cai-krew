@@ -1,4 +1,6 @@
-# memory-overseer
+# LoreKeeper
+
+<img src="lorekeeper.png" width="200"/>
 
 Daily batch job that reviews all mem0 memories and identifies ones that should be
 pruned (duplicates, contradictions, outdated facts) or merged.
@@ -67,15 +69,15 @@ oc exec -n <namespace> deploy/mem0-postgres -- \
 
 ```bash
 # Build image (first time)
-oc new-build --binary --name=memory-overseer -n <namespace>
-oc start-build memory-overseer --from-dir=. --follow -n <namespace>
+oc new-build --binary --name=lorekeeper -n <namespace>
+oc start-build lorekeeper --from-dir=. --follow -n <namespace>
 
 # Deploy CronJob (fill in MEM0_ACTOR_KEYS and cluster domain first)
 oc apply -f cronjob.yaml -n <namespace>
 
 # Trigger a manual run to test
-oc create job --from=cronjob/memory-overseer memory-overseer-test -n <namespace>
-oc logs -f job/memory-overseer-test -n <namespace>
+oc create job --from=cronjob/lorekeeper lorekeeper-test -n <namespace>
+oc logs -f job/lorekeeper-test -n <namespace>
 ```
 
 ---

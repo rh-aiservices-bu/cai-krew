@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from openai import OpenAI
 
@@ -120,10 +120,15 @@ def run(
     litellm_url: str,
     litellm_model: str,
     api_key: str,
+    on_actions: Optional[Callable[[str, List[Dict]], None]] = None,
 ) -> Dict[str, Any]:
     """
     Fetch all memories, analyze them, and return a pruning report.
-    Does NOT apply any changes (v1: report only).
+    Does NOT apply any changes (report only).
+
+    on_actions(scope_label, actions) is called immediately after each actor's
+    plan is ready, enabling real-time Slack posting rather than waiting for
+    the full run to complete.
 
     Returns a dict with structure:
       {
@@ -179,6 +184,11 @@ def run(
         )
         report["personal"][actor_key] = {"memories_count": len(memories), "plan": plan}
         report["summary"]["total_memories"] += len(memories)
+        if on_actions and plan:
+            try:
+                on_actions(actor_key, plan)
+            except Exception as exc:
+                logger.warning("on_actions callback failed for %s: %s", actor_key, exc)
 
     # ── Team memories ─────────────────────────────────────────────────────────
     logger.info("Analyzing team memories")
@@ -201,6 +211,11 @@ def run(
         )
         report["team"] = {"memories_count": len(team_memories), "plan": team_plan}
         report["summary"]["total_memories"] += len(team_memories)
+        if on_actions and team_plan:
+            try:
+                on_actions("team", team_plan)
+            except Exception as exc:
+                logger.warning("on_actions callback failed for team: %s", exc)
     else:
         report["team"] = {"memories_count": 0, "plan": []}
 

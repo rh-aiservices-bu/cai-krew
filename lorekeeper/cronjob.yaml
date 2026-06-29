@@ -1,19 +1,20 @@
-# Memory overseer CronJob — runs daily at 02:00, prints pruning report to logs.
-# v1: report-only. No changes are written to mem0.
+# Lorekeeper CronJob — runs daily at 02:00.
+# Posts interactive approval messages to Slack when SLACK_BOT_TOKEN is set,
+# otherwise prints the JSON report to stdout (job logs).
 #
 # Deploy:
 #   oc apply -f cronjob.yaml -n <namespace>
 #
 # Trigger manually:
-#   oc create job --from=cronjob/memory-overseer memory-overseer-manual -n <namespace>
+#   oc create job --from=cronjob/lorekeeper lorekeeper-manual -n <namespace>
 #
 # View last run logs:
-#   oc logs job/memory-overseer-manual -n <namespace>
+#   oc logs job/lorekeeper-manual -n <namespace>
 #
 # Required before first deploy:
 #   1. Build the image:
-#        oc new-build --binary --name=memory-overseer -n <namespace>
-#        oc start-build memory-overseer --from-dir=. --follow -n <namespace>
+#        oc new-build --binary --name=lorekeeper -n <namespace>
+#        oc start-build lorekeeper --from-dir=. --follow -n <namespace>
 #   2. Set MEM0_ACTOR_KEYS below to the actor keys you want to analyze.
 #      Actor keys are the composite keys stored as agent_id in personal memories,
 #      e.g. "hermes|alice" for user alice talking to the hermes agent.
@@ -23,7 +24,7 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: memory-overseer
+  name: lorekeeper
 spec:
   schedule: "0 2 * * *"
   concurrencyPolicy: Forbid        # skip if previous run is still going
@@ -36,13 +37,14 @@ spec:
         spec:
           restartPolicy: Never
           containers:
-          - name: memory-overseer
-            image: image-registry.openshift-image-registry.svc:5000/<namespace>/memory-overseer:latest
+          - name: lorekeeper
+            image: quay.io/<your-org>/lorekeeper:0.1
+            imagePullPolicy: Always
             env:
             - name: MEM0_URL
-              value: "https://mem0-server-<namespace>.apps.<cluster-domain>"
+              value: "https://<mem0-server-route>"
             - name: LITELLM_URL
-              value: "<LITEMASS-URL>"
+              value: "https://<litellm-route>"
             - name: LITELLM_MODEL
               value: "Qwen3.6-35B-A3B"
             - name: OPENAI_API_KEY
@@ -50,8 +52,16 @@ spec:
                 secretKeyRef:
                   name: mem0-config
                   key: OPENAI_API_KEY
+            # Slack integration — post interactive approval messages instead of stdout.
+            # Requires the lorekeeper-slack secret (see approver.yaml for how to create it).
+            - name: SLACK_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lorekeeper-slack
+                  key: SLACK_BOT_TOKEN
+            - name: SLACK_CHANNEL
+              value: "#lorekeeper"
             # Optional: restrict analysis to specific actor keys.
             # When omitted, actor keys are discovered automatically via GET /memories.
-            # To restrict: set to a comma-separated list, e.g. "hermes|alice,hermes|bob"
             # - name: MEM0_ACTOR_KEYS
-            #   value: ""
+            #   value: "hermes|alice,hermes|bob"

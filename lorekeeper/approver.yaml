@@ -1,0 +1,94 @@
+# Lorekeeper approver — HTTP service that handles Slack button callbacks.
+#
+# Required secrets (create once):
+#   oc create secret generic lorekeeper-slack \
+#     --from-literal=SLACK_BOT_TOKEN=xoxb-... \
+#     --from-literal=SLACK_SIGNING_SECRET=... \
+#     -n <namespace>
+#
+# Both values are on the app's Basic Information page in the Slack dashboard.
+#
+# Deploy:
+#   oc apply -f approver.yaml -n <namespace>
+#
+# After deploying, confirm the Route URL matches the request_url in the
+# Slack app manifest's interactivity settings.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lorekeeper-approver
+  labels:
+    app: lorekeeper-approver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lorekeeper-approver
+  template:
+    metadata:
+      labels:
+        app: lorekeeper-approver
+    spec:
+      containers:
+      - name: approver
+        image: quay.io/<your-org>/lorekeeper:0.1
+        command: ["python", "-m", "uvicorn", "approver:app", "--host", "0.0.0.0", "--port", "8000"]
+        ports:
+        - containerPort: 8000
+        env:
+        - name: MEM0_URL
+          value: "https://<mem0-server-route>"
+        - name: SLACK_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: lorekeeper-slack
+              key: SLACK_BOT_TOKEN
+        - name: SLACK_SIGNING_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: lorekeeper-slack
+              key: SLACK_SIGNING_SECRET
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lorekeeper-approver
+spec:
+  selector:
+    app: lorekeeper-approver
+  ports:
+  - port: 8000
+    targetPort: 8000
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: lorekeeper-approver
+  annotations:
+    haproxy.router.openshift.io/timeout: 10s
+spec:
+  to:
+    kind: Service
+    name: lorekeeper-approver
+  port:
+    targetPort: 8000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
