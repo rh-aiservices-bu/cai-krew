@@ -81,11 +81,11 @@ class Mem0OssProvider(MemoryProvider):
         _raw_uid  = kwargs.get("user_id") or ""
         # Only use user_name if it's non-empty, not just a Slack handle (@user), and looks like a real name.
         if _raw_name and _raw_name.strip() and not _raw_name.startswith("@"):
-            self._user_id = _raw_name.strip()
+            self._user_id = _raw_name.strip().replace(" ", "_")
         elif _raw_uid:
-            self._user_id = _raw_uid
+            self._user_id = _raw_uid.replace(" ", "_")
         else:
-            self._user_id = os.getenv("MEM0_USER_ID") or "hermes-user"
+            self._user_id = (os.getenv("MEM0_USER_ID") or "hermes-user").replace(" ", "_")
         if os.getenv("MEM0_AGENT_ID"):
             self._agent_id = os.getenv("MEM0_AGENT_ID")
         elif kwargs.get("agent_identity"):

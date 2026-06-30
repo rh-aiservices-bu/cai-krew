@@ -74,9 +74,9 @@ class Mem0Client:
         extra_instructions: str = "",
     ) -> None:
         self.url        = url.rstrip("/")
-        self.user_id    = user_id
-        self.agent_id   = agent_id
-        self.actor_key  = make_actor_key([user_id, agent_id])
+        self.user_id    = user_id.replace(" ", "_")
+        self.agent_id   = agent_id.replace(" ", "_")
+        self.actor_key  = make_actor_key([self.user_id, self.agent_id])
         self.run_id     = run_id
         self.extra_instructions = extra_instructions
 
