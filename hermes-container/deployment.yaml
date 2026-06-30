@@ -1,0 +1,85 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-agent
+  namespace: cai-crew
+  labels:
+    app: hermes-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-agent
+  template:
+    metadata:
+      labels:
+        app: hermes-agent
+    spec:
+      serviceAccountName: hermes-agent
+
+      initContainers:
+        - name: init-hermes
+          image: quay.io/ckavili/hermes-mem0:0.0.1
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # Create required dirs on PVC
+              mkdir -p /data/{skills,sessions,logs,memories,cache/models,mem0,plugins}
+              # Clone mem0_oss plugin (always pull latest)
+              rm -rf /data/plugins/mem0_oss
+              git clone --depth 1 https://github.com/rh-aiservices-bu/cai-krew.git /tmp/cai-krew
+              cp -r /tmp/cai-krew/hermes-plugins/mem0_oss /data/plugins/mem0_oss
+              # Always overwrite config and .env from secrets
+              cp /secrets/env/.env /data/.env
+              cp /secrets/config/config.yaml /data/config.yaml
+          volumeMounts:
+            - name: hermes-data
+              mountPath: /data
+            - name: hermes-env
+              mountPath: /secrets/env
+              readOnly: true
+            - name: config
+              mountPath: /secrets/config
+              readOnly: true
+
+      containers:
+        - name: hermes-agent
+          image: quay.io/ckavili/hermes-mem0:0.0.1
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8787
+              protocol: TCP
+          env:
+            - name: HERMES_HOME
+              value: /app/.hermes
+            - name: HERMES_PROFILE
+              value: default
+            - name: MEM0_DB_PATH
+              value: /app/.hermes/mem0
+
+          volumeMounts:
+            - name: hermes-data
+              mountPath: /app/.hermes
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+
+      volumes:
+        - name: hermes-env
+          secret:
+            secretName: hermes-secrets
+        - name: config
+          secret:
+            secretName: hermes-config
+        - name: hermes-data
+          persistentVolumeClaim:
+            claimName: hermes-data
