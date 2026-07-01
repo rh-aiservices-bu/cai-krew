@@ -8,21 +8,52 @@ Adds long-term memory to Claude Code via two hooks:
 
 ## Setup
 
-### 1. Configure mem0 credentials
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/cai-krew/cai-krew.git
+cd cai-krew
+```
+
+The repo contains two sibling directories that must stay together:
+
+```
+cai-krew/
+├── claude-code-plugin/   ← hooks and daemon
+└── mem0_client/          ← shared client library (imported by the hooks)
+```
+
+### 2. Note the absolute path to `claude-code-plugin`
+
+```bash
+cd claude-code-plugin
+pwd
+# e.g. /Users/you/cai-krew/claude-code-plugin
+```
+
+You'll use this path in the next steps — replace `/path/to/claude-code-plugin` with what `pwd` printed.
+
+### 3. Create a virtual environment and install dependencies
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install httpx
+```
+
+### 4. Configure mem0 credentials
 
 Create `~/.claude/mem0.env`:
 
 ```env
-MEM0_URL=https://mem0-server-cai-crew.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com
-MEM0_USER_ID=Cansu
+MEM0_URL=<ask-your-admin>
+MEM0_USER_ID=<your-name>
 MEM0_AGENT_ID=claude-code
 MEM0_CUSTOM_INSTRUCTIONS="Always refer to the user by their actual name in stored memories. The user's name can be derived from the user_id field — for  example, if user_id is 'alice|research-agent-1', the user's name is 'Alice'. Never use generic terms like 'User' or 'The user'. When a new fact relates to the  same subject as an existing memory, prefer UPDATE over ADD and merge the information into a single consolidated memory. Only use ADD when the fact is genuinely new with no overlap."
-
 ```
 
-### 2. Register the hooks
+### 5. Register the hooks
 
-Add to `~/.claude/settings.json` (global — all projects):
+Add to `~/.claude/settings.json` (global — all projects), replacing `/path/to/claude-code-plugin` with the path from step 2:
 
 ```json
 {
@@ -32,7 +63,7 @@ Add to `~/.claude/settings.json` (global — all projects):
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/ckavili/RedHat/Tech/caikrew/cai-krew/claude-code-plugin/mem0_prefetch.py"
+            "command": "/path/to/claude-code-plugin/.venv/bin/python /path/to/claude-code-plugin/mem0_prefetch.py"
           }
         ]
       }
@@ -42,7 +73,7 @@ Add to `~/.claude/settings.json` (global — all projects):
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/ckavili/RedHat/Tech/caikrew/cai-krew/claude-code-plugin/mem0_sync.py"
+            "command": "/path/to/claude-code-plugin/.venv/bin/python /path/to/claude-code-plugin/mem0_sync.py"
           }
         ]
       }
@@ -51,17 +82,10 @@ Add to `~/.claude/settings.json` (global — all projects):
 }
 ```
 
+> Use the full path to the `.venv` Python interpreter (not bare `python3`) so the hooks run with the correct virtualenv regardless of shell environment.
+
 Or add to `<project>/.claude/settings.json` for project-scoped activation only.
 Both levels can coexist — they merge, not override.
-
-### 3. Install dependency
-
-```bash
-pip install httpx
-```
-
-`mem0_client` (the library these hooks use) must be present one directory above `claude-code-plugin/`.
-When distributing to a new machine, copy both `claude-code-plugin/` and `mem0_client/` to the same parent directory.
 
 ## How it works
 
