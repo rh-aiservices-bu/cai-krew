@@ -71,5 +71,5 @@ USER 1001
 # Start with tini as PID 1 (handles signals properly)
 ENTRYPOINT ["/usr/local/bin/tini", "--"]
 
-# Default: run Slack gateway in the background
-CMD ["hermes", "gateway", "run"]
+# --verbose enables stderr logging so logs appear in `oc logs` / `kubectl logs`
+CMD ["hermes", "gateway", "run", "--verbose"]

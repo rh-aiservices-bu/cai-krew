@@ -20,7 +20,7 @@ spec:
 
       initContainers:
         - name: init-hermes
-          image: quay.io/ckavili/hermes-mem0:0.0.1
+          image: quay.io/rlundber/hermes-container:0.1
           command:
             - sh
             - -c
@@ -47,7 +47,7 @@ spec:
 
       containers:
         - name: hermes-agent
-          image: quay.io/ckavili/hermes-mem0:0.0.1
+          image: quay.io/rlundber/hermes-container:0.1
           imagePullPolicy: Always
           ports:
             - name: http
