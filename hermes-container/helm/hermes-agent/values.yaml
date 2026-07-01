@@ -1,0 +1,86 @@
+## Agent identity — used as the name prefix for all per-agent resources
+agent:
+  name: hermes-agent
+  namespace: cai-crew
+  image:
+    repository: quay.io/ckavili/hermes-mem0
+    tag: "0.0.3"
+    pullPolicy: Always
+
+## LLM endpoint — shared between model: and custom_providers: in config.yaml
+llm:
+  model: Qwen3.6-35B-A3B
+  baseUrl: ""
+  apiKey: ""
+
+## Shared config secret — contains config.yaml; may be shared across agents
+## Set createConfigSecret: true to let this chart manage it, false to use a pre-existing one
+configSecret:
+  name: hermes-config
+  create: true
+
+## Per-agent env secret — contains .env with Slack tokens, LLM endpoint, and mem0 config
+envSecret:
+  # Slack
+  slackBotToken: ""
+  slackAppToken: ""
+  slackSocketMode: "true"
+  slackAllowedUsers: ""
+  slackHomeChannel: ""
+  slackTriage: "true"
+  slackTriageModel: ""   # defaults to llm.model if empty
+
+  # LLM (passed as OPENAI_* so Hermes triage code picks them up)
+  openaiBaseUrl: ""      # no trailing /v1 — Hermes appends it
+  openaiApiKey: ""
+
+  # mem0
+  mem0Url: "http://mem0-server.cai-crew.svc.cluster.local:8000"
+  mem0AgentId: ""        # defaults to agent.name if empty
+  mem0CustomInstructions: "Always refer to the user by their actual name in stored memories. The user's name can be derived from the user_id field. When a new fact relates to the same subject as an existing memory, prefer UPDATE over ADD and merge the information into a single consolidated memory. Only use ADD when the fact is genuinely new with no overlap."
+
+## Per-agent persona
+soul: |
+  You are Hermes, an AI assistant embedded in the Red Hat AI Services team (cai-crew).
+  You help engineers with technical questions, code review, architecture decisions,
+  and operational tasks related to AI/ML workloads on OpenShift.
+
+  ## Style
+  - Be direct and concise — engineers here are senior, skip the hand-holding
+  - Prefer substance over filler; cut preamble and summaries unless asked
+  - Admit uncertainty plainly rather than hedging with vague language
+  - Push back on bad ideas with a clear reason
+  - Use lists only when items are genuinely enumerable, not as a default format
+
+  ## Technical posture
+  - Prefer simple, operational solutions over clever abstractions
+  - When touching infrastructure (OpenShift, K8s, containers), think about security
+    contexts, RBAC, and non-root constraints by default
+  - Treat edge cases as part of the design, not cleanup
+
+  ## What to avoid
+  - Sycophancy and hype language
+  - Repeating the user's framing if it is wrong
+  - Overexplaining things the team already knows
+  - Verbose multi-paragraph responses when a sentence will do
+
+## PVC
+persistence:
+  size: 5Gi
+  storageClassName: ""  # leave empty to use cluster default
+
+## Resource limits
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+## Env vars injected directly into the main container
+env:
+  HERMES_HOME: /app/.hermes
+  HERMES_PROFILE: default
+  MEM0_DB_PATH: /app/.hermes/mem0
+  OPENAI_BASE_URL: ""

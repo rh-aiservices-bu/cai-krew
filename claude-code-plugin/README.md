@@ -13,10 +13,11 @@ Adds long-term memory to Claude Code via two hooks:
 Create `~/.claude/mem0.env`:
 
 ```env
-MEM0_URL=https://your-mem0-server.example.com
-MEM0_USER_ID=YourName
+MEM0_URL=https://mem0-server-cai-crew.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com
+MEM0_USER_ID=Cansu
 MEM0_AGENT_ID=claude-code
-# MEM0_CUSTOM_INSTRUCTIONS=
+MEM0_CUSTOM_INSTRUCTIONS="Always refer to the user by their actual name in stored memories. The user's name can be derived from the user_id field — for  example, if user_id is 'alice|research-agent-1', the user's name is 'Alice'. Never use generic terms like 'User' or 'The user'. When a new fact relates to the  same subject as an existing memory, prefer UPDATE over ADD and merge the information into a single consolidated memory. Only use ADD when the fact is genuinely new with no overlap."
+
 ```
 
 ### 2. Register the hooks
@@ -31,7 +32,7 @@ Add to `~/.claude/settings.json` (global — all projects):
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /path/to/cai-krew/claude-code-plugin/mem0_prefetch.py"
+            "command": "python3 /Users/ckavili/RedHat/Tech/caikrew/cai-krew/claude-code-plugin/mem0_prefetch.py"
           }
         ]
       }
@@ -41,7 +42,7 @@ Add to `~/.claude/settings.json` (global — all projects):
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /path/to/cai-krew/claude-code-plugin/mem0_sync.py"
+            "command": "python3 /Users/ckavili/RedHat/Tech/caikrew/cai-krew/claude-code-plugin/mem0_sync.py"
           }
         ]
       }

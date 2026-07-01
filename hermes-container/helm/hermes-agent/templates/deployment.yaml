@@ -2,31 +2,30 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hermes-agent
-  namespace: cai-crew
+  name: {{ .Values.agent.name }}
+  namespace: {{ .Values.agent.namespace }}
   labels:
-    app: hermes-agent
+    app: {{ .Values.agent.name }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: hermes-agent
+      app: {{ .Values.agent.name }}
   template:
     metadata:
       labels:
-        app: hermes-agent
+        app: {{ .Values.agent.name }}
     spec:
-      serviceAccountName: hermes-agent
+      serviceAccountName: {{ .Values.agent.name }}
 
       initContainers:
         - name: init-hermes
-          image: quay.io/ckavili/hermes-mem0:0.0.3
+          image: {{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}
           command:
             - sh
             - -c
             - |
               set -e
-              # Create required dirs on PVC
               mkdir -p /data/{skills,sessions,logs,memories,cache/models,mem0,plugins}
               # Clone mem0_oss plugin (always pull latest)
               rm -rf /data/plugins/mem0_oss
@@ -52,45 +51,33 @@ spec:
 
       containers:
         - name: hermes-agent
-          image: quay.io/ckavili/hermes-mem0:0.0.3
-          imagePullPolicy: Always
+          image: {{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           ports:
             - name: http
               containerPort: 8787
               protocol: TCP
           env:
-            - name: HERMES_HOME
-              value: /app/.hermes
-            - name: HERMES_PROFILE
-              value: default
-            - name: MEM0_DB_PATH
-              value: /app/.hermes/mem0
-            - name: OPENAI_BASE_URL
-              value: your-url
-            
-
+            {{- range $key, $val := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
           volumeMounts:
             - name: hermes-data
               mountPath: /app/.hermes
-
           resources:
-            requests:
-              cpu: "500m"
-              memory: "1Gi"
-            limits:
-              cpu: "2"
-              memory: "4Gi"
+            {{- toYaml .Values.resources | nindent 12 }}
 
       volumes:
         - name: hermes-env
           secret:
-            secretName: hermes-secrets
+            secretName: {{ .Values.agent.name }}-secrets
         - name: config
           secret:
-            secretName: hermes-config
+            secretName: {{ .Values.configSecret.name }}
         - name: soul
           configMap:
-            name: hermes-soul
+            name: {{ .Values.agent.name }}-soul
         - name: hermes-data
           persistentVolumeClaim:
-            claimName: hermes-data
+            claimName: {{ .Values.agent.name }}-data

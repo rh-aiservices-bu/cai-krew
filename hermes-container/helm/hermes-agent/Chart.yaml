@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hermes-agent
+description: Hermes AI agent — Slack gateway with mem0 memory and configurable persona
+type: application
+version: 0.1.0
+appVersion: "0.0.3"

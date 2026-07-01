@@ -1,0 +1,11 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.agent.name }}-soul
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+data:
+  SOUL.md: |
+{{ .Values.soul | indent 4 }}
