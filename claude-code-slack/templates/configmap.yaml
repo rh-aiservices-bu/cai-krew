@@ -30,3 +30,4 @@ data:
   MEM0_ENV_TARGET_PATH: {{ .Values.mem0.envTargetPath | quote }}
   MEM0_USER_ID_FALLBACK: {{ default .Values.mem0.userId .Values.mem0.userIdFallback | quote }}
   MEM0_SESSION_HOME_ROOT: {{ .Values.mem0.sessionHomeRoot | quote }}
+  MEM0_PLUGIN_PATH: {{ .Values.mem0.pluginPath | quote }}
