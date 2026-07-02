@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "claude-code-slack.fullname" . }}-config
+  labels:
+    {{- include "claude-code-slack.labels" . | nindent 4 }}
+data:
+  HOME: "/home/claude"
+  CLAUDE_CONFIG_DIR: "/home/claude/.claude"
+  ANTHROPIC_BASE_URL: {{ .Values.anthropic.baseUrl | quote }}
+  ANTHROPIC_MODEL: {{ .Values.anthropic.model | quote }}
+  ANTHROPIC_DEFAULT_OPUS_MODEL: {{ .Values.anthropic.model | quote }}
+  ANTHROPIC_DEFAULT_SONNET_MODEL: {{ .Values.anthropic.model | quote }}
+  ANTHROPIC_DEFAULT_HAIKU_MODEL: {{ .Values.anthropic.model | quote }}
+  CLAUDE_PERMISSION_MODE: {{ .Values.claude.permissionMode | quote }}
+  CLAUDE_OUTPUT_FORMAT: {{ .Values.claude.outputFormat | quote }}
+  CLAUDE_TIMEOUT_SECONDS: {{ .Values.claude.timeoutSeconds | quote }}
+  CLAUDE_MAX_PROMPT_CHARS: {{ .Values.claude.maxPromptChars | quote }}
+  CLAUDE_LOG_LEVEL: {{ .Values.claude.logging.level | quote }}
+  CLAUDE_SLACK_PROGRESS: {{ .Values.claude.logging.slackProgress | quote }}
+  CLAUDE_SLACK_PROGRESS_INTERVAL_SECONDS: {{ .Values.claude.logging.slackProgressIntervalSeconds | quote }}
+  CLAUDE_INCLUDE_STDERR_IN_SLACK: {{ .Values.claude.logging.includeStderrInSlack | quote }}
+  CLAUDE_APPEND_SYSTEM_PROMPT: {{ .Values.claude.appendSystemPrompt | quote }}
+  CLAUDE_EXTRA_ARGS: {{ join " " .Values.claude.extraArgs | quote }}
+  CLAUDE_ALLOWED_TOOLS: {{ join "," .Values.claude.allowedTools | quote }}
+  CLAUDE_DISALLOWED_TOOLS: {{ join "," .Values.claude.disallowedTools | quote }}
+  CLAUDE_SETTINGS_PATH: {{ ternary .Values.claude.settings.path "" .Values.claude.settings.enabled | quote }}
+  MEM0_ENABLED: {{ .Values.mem0.enabled | quote }}
+  MEM0_ENV_SOURCE_PATH: {{ .Values.mem0.envSourcePath | quote }}
+  MEM0_ENV_TARGET_PATH: {{ .Values.mem0.envTargetPath | quote }}
+  MEM0_USER_ID_FALLBACK: {{ default .Values.mem0.userId .Values.mem0.userIdFallback | quote }}
+  MEM0_SESSION_HOME_ROOT: {{ .Values.mem0.sessionHomeRoot | quote }}

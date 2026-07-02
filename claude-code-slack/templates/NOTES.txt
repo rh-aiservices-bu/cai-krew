@@ -1,0 +1,26 @@
+Create a Slack app with Socket Mode enabled, install it to your workspace, and provide:
+
+  SLACK_BOT_TOKEN=xoxb-...
+  SLACK_APP_TOKEN=xapp-...
+
+Install:
+
+  helm upgrade --install {{ include "claude-code-slack.fullname" . }} ./charts/claude-code-slack \
+    --set slack.botToken=xoxb-... \
+    --set slack.appToken=xapp-...
+
+Build the image when build.enabled=true:
+
+  oc start-build {{ include "claude-code-slack.fullname" . }} --follow
+
+Watch rollout:
+
+  oc rollout status deploy/{{ include "claude-code-slack.fullname" . }}
+
+Watch bridge logs:
+
+  oc logs deploy/{{ include "claude-code-slack.fullname" . }} -f
+
+Use Slack:
+
+  @your-bot inspect this repo and suggest the first improvement

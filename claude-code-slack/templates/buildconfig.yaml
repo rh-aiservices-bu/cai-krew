@@ -1,0 +1,790 @@
+{{- if .Values.build.enabled }}
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: {{ include "claude-code-slack.fullname" . }}
+  labels:
+    {{- include "claude-code-slack.labels" . | nindent 4 }}
+spec:
+  source:
+    type: Dockerfile
+    dockerfile: |-
+      FROM registry.access.redhat.com/ubi9/nodejs-20:latest
+
+      USER 0
+
+      WORKDIR /opt/slack-claude
+
+      RUN npm init -y \
+          && if command -v dnf >/dev/null 2>&1; then dnf install -y --allowerasing git wget findutils python3 python3-pip && (dnf install -y ripgrep tree || true) && dnf clean all; else microdnf install -y git wget findutils python3 python3-pip && (microdnf install -y ripgrep tree || true) && microdnf clean all; fi \
+          && npm install @anthropic-ai/claude-code @slack/bolt \
+          && mkdir -p /home/claude /workspace \
+          && chgrp -R 0 /home/claude /workspace /opt/slack-claude \
+          && chmod -R g=u /home/claude /workspace /opt/slack-claude
+
+      RUN cat > /opt/slack-claude/mem0_prefetch_wrapper.py <<'EOF'
+      #!/usr/bin/env python3
+      import json
+      import os
+      from pathlib import Path
+      import re
+      import subprocess
+      import sys
+      from datetime import datetime, timezone
+
+
+      def log_event(**fields):
+          try:
+              claude_dir = Path.home() / ".claude"
+              claude_dir.mkdir(parents=True, exist_ok=True)
+              with (claude_dir / "mem0_prefetch.log").open("a") as handle:
+                  handle.write(json.dumps({
+                      "ts": datetime.now(timezone.utc).isoformat(),
+                      **fields,
+                  }) + "\n")
+          except Exception:
+              pass
+
+
+      def env_value(key):
+          env_file = Path.home() / ".claude" / "mem0.env"
+          if not env_file.exists():
+              return ""
+          for line in env_file.read_text(errors="replace").splitlines():
+              if line.strip().startswith(f"{key}="):
+                  return line.split("=", 1)[1].strip()
+          return ""
+
+      if len(sys.argv) < 3:
+          sys.exit(0)
+
+      hook_input = sys.stdin.read()
+      try:
+          hook_data = json.loads(hook_input or "{}")
+      except Exception:
+          hook_data = {}
+
+      try:
+          result = subprocess.run(
+              sys.argv[1:],
+              input=hook_input,
+              text=True,
+              capture_output=True,
+              check=False,
+          )
+      except Exception as error:
+          log_event(
+              event="prefetch_exec_failed",
+              session_id=hook_data.get("session_id", ""),
+              mem0_user_id=env_value("MEM0_USER_ID"),
+              error=str(error),
+          )
+          sys.exit(0)
+
+      output = result.stdout or ""
+      stderr = result.stderr or ""
+      stripped = output.strip()
+      empty_context = bool(re.fullmatch(r"<memory-context>\s*</memory-context>", stripped, flags=re.DOTALL))
+      log_event(
+          event="prefetch_result",
+          session_id=hook_data.get("session_id", ""),
+          mem0_user_id=env_value("MEM0_USER_ID"),
+          returncode=result.returncode,
+          stdout_bytes=len(output),
+          stderr_bytes=len(stderr),
+          empty_context=empty_context,
+          preview=stripped[:300],
+          stderr_preview=stderr.strip()[:300],
+      )
+      if not stripped:
+          sys.exit(0)
+
+      if empty_context:
+          sys.exit(0)
+
+      sys.stdout.write(output)
+      EOF
+
+      RUN chmod +x /opt/slack-claude/mem0_prefetch_wrapper.py \
+          && chgrp 0 /opt/slack-claude/mem0_prefetch_wrapper.py \
+          && chmod g=u /opt/slack-claude/mem0_prefetch_wrapper.py
+
+      RUN cat > /opt/slack-claude/server.mjs <<'EOF'
+      import { App } from "@slack/bolt";
+      import { spawn } from "node:child_process";
+      import crypto from "node:crypto";
+      import fs from "node:fs";
+      import path from "node:path";
+
+      const app = new App({
+        token: process.env.SLACK_BOT_TOKEN,
+        appToken: process.env.SLACK_APP_TOKEN,
+        socketMode: true,
+      });
+
+      const botUser = await app.client.auth.test({ token: process.env.SLACK_BOT_TOKEN });
+      const botUserId = botUser.user_id;
+
+      const inFlight = new Set();
+      const activeThreads = new Set();
+      const pendingApprovals = new Map();
+      const slackUserCache = new Map();
+
+      function readMem0EnvTemplate() {
+        if (!isEnabled(process.env.MEM0_ENABLED)) return;
+        const source = process.env.MEM0_ENV_SOURCE_PATH || "/etc/mem0/mem0.env";
+        if (!fs.existsSync(source)) {
+          log("warn", "mem0_env_missing", { source });
+          return "";
+        }
+        return fs.readFileSync(source, "utf8");
+      }
+
+      function withMem0UserId(template, userName) {
+        const lines = (template || "")
+          .split("\n")
+          .filter((line) => !line.trim().startsWith("MEM0_USER_ID="));
+        lines.push(`MEM0_USER_ID=${userName}`);
+        return `${lines.filter(Boolean).join("\n")}\n`;
+      }
+
+      function mem0UserIdFromEnvFile(filePath) {
+        if (!fs.existsSync(filePath)) return "";
+        const line = fs.readFileSync(filePath, "utf8")
+          .split("\n")
+          .find((entry) => entry.trim().startsWith("MEM0_USER_ID="));
+        if (!line) return "";
+        return line.slice(line.indexOf("=") + 1).trim();
+      }
+
+      function sessionHome(sessionId) {
+        const root = process.env.MEM0_SESSION_HOME_ROOT || "/home/claude/sessions";
+        return path.join(root, sessionId);
+      }
+
+      function prepareMem0Env(sessionId, userName) {
+        if (!isEnabled(process.env.MEM0_ENABLED)) return {};
+        const home = sessionHome(sessionId);
+        const target = process.env.MEM0_ENV_TARGET_PATH || "/home/claude/.claude/mem0.env";
+        const sessionTarget = target.startsWith("/home/claude/")
+          ? path.join(home, target.slice("/home/claude/".length))
+          : path.join(home, ".claude", "mem0.env");
+        try {
+          const template = readMem0EnvTemplate();
+          if (!template) return { HOME: home, CLAUDE_CONFIG_DIR: path.join(home, ".claude") };
+          const fallback = process.env.MEM0_USER_ID_FALLBACK || process.env.MEM0_DEFAULT_USER_ID || "Slack User";
+          let mem0UserId = userName;
+          const existingUserId = mem0UserIdFromEnvFile(sessionTarget);
+          if (userName === fallback && existingUserId && existingUserId !== fallback) {
+            mem0UserId = existingUserId;
+            log("warn", "mem0_env_preserved_existing_user", { target: sessionTarget, mem0UserId });
+          }
+          fs.mkdirSync(path.dirname(sessionTarget), { recursive: true });
+          fs.writeFileSync(sessionTarget, withMem0UserId(template, mem0UserId), { mode: 0o600 });
+          fs.chmodSync(sessionTarget, 0o600);
+          log("info", "mem0_env_prepared", { target: sessionTarget, mem0UserId });
+          return { HOME: home, CLAUDE_CONFIG_DIR: path.join(home, ".claude") };
+        } catch (error) {
+          log("error", "mem0_env_prepare_failed", { error: error.message });
+          return { HOME: home, CLAUDE_CONFIG_DIR: path.join(home, ".claude") };
+        }
+      }
+
+      function log(level, message, details = {}) {
+        const levels = ["debug", "info", "warn", "error"];
+        const configuredLevel = process.env.CLAUDE_LOG_LEVEL || "info";
+        if (levels.indexOf(level) < levels.indexOf(configuredLevel)) return;
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level,
+          message,
+          ...details,
+        }));
+      }
+
+      function isEnabled(value) {
+        return ["1", "true", "yes", "on"].includes(String(value || "").toLowerCase());
+      }
+
+      function threadKey(event) {
+        return `${event.team || "team"}:${event.channel}:${event.thread_ts || event.ts}`;
+      }
+
+      function uuidFromKey(key) {
+        const hex = crypto.createHash("sha256").update(key).digest("hex").slice(0, 32);
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+      }
+
+      function stripBotMention(text = "") {
+        return text.replace(new RegExp(`<@${botUserId}>`, "g"), "").trim();
+      }
+
+      function trimPrompt(text) {
+        const max = Number.parseInt(process.env.CLAUDE_MAX_PROMPT_CHARS || "24000", 10);
+        if (text.length <= max) return text;
+        return text.slice(text.length - max);
+      }
+
+      function readableSlackName(user) {
+        const profile = user?.profile || {};
+        return [
+          profile.display_name_normalized,
+          profile.display_name,
+          profile.real_name_normalized,
+          profile.real_name,
+          user?.real_name,
+          user?.name,
+        ].map((value) => String(value || "").trim()).find(Boolean);
+      }
+
+      async function resolveSlackUserName(client, userId) {
+        const fallback = process.env.MEM0_USER_ID_FALLBACK || process.env.MEM0_DEFAULT_USER_ID || userId || "Slack User";
+        if (!userId) {
+          log("warn", "slack_user_missing", { fallback });
+          return fallback;
+        }
+        if (slackUserCache.has(userId)) return slackUserCache.get(userId);
+        try {
+          const result = await client.users.info({ user: userId });
+          const name = readableSlackName(result.user) || fallback;
+          slackUserCache.set(userId, name);
+          log("info", "slack_user_resolved", { user: userId, name, fallbackUsed: name === fallback });
+          return name;
+        } catch (error) {
+          log("warn", "slack_user_resolve_failed", {
+            user: userId,
+            fallback,
+            error: error.message,
+            slackError: error.data?.error,
+            needed: error.data?.needed,
+            provided: error.data?.provided,
+          });
+          return fallback;
+        }
+      }
+
+      async function getThreadMessages(client, event) {
+        if (!event.thread_ts) return [];
+        try {
+          const replies = await client.conversations.replies({
+            channel: event.channel,
+            ts: event.thread_ts,
+            limit: 40,
+          });
+          return replies.messages || [];
+        } catch (error) {
+          console.warn("Could not read thread:", error?.data || error);
+          return [];
+        }
+      }
+
+      function formatThread(messages) {
+        return messages
+          .filter((message) => message.text)
+          .map((message) => `${message.user || message.bot_id || "unknown"}: ${message.text}`)
+          .join("\n");
+      }
+
+      function botWasInThread(messages) {
+        return messages.some((message) => {
+          return message.user === botUserId;
+        });
+      }
+
+      function splitSlackText(text) {
+        const chunks = [];
+        let rest = text || "(no output)";
+        while (rest.length > 0) {
+          chunks.push(rest.slice(0, 3500));
+          rest = rest.slice(3500);
+        }
+        return chunks;
+      }
+
+      function mergeAllowedTools(extraAllowedTools = []) {
+        const tools = new Set(
+          (process.env.CLAUDE_ALLOWED_TOOLS || "")
+            .split(",")
+            .map((tool) => tool.trim())
+            .filter(Boolean),
+        );
+        for (const tool of extraAllowedTools) {
+          tools.add(tool);
+        }
+        return [...tools].join(",");
+      }
+
+      function claudeArgs(prompt, sessionId, resumeSession, extraAllowedTools = []) {
+        const args = [
+          "--print",
+        ];
+
+        if (resumeSession) {
+          args.push("--resume", sessionId);
+        } else {
+          args.push("--session-id", sessionId);
+        }
+
+        if (process.env.CLAUDE_SETTINGS_PATH) {
+          args.push("--settings", process.env.CLAUDE_SETTINGS_PATH);
+        }
+
+        args.push(
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--permission-mode",
+          process.env.CLAUDE_PERMISSION_MODE || "acceptEdits",
+        );
+
+        if (process.env.CLAUDE_APPEND_SYSTEM_PROMPT) {
+          args.push("--append-system-prompt", process.env.CLAUDE_APPEND_SYSTEM_PROMPT);
+        }
+        const allowedTools = mergeAllowedTools(extraAllowedTools);
+        if (allowedTools) {
+          args.push("--allowedTools", allowedTools);
+        }
+        if (process.env.CLAUDE_DISALLOWED_TOOLS) {
+          args.push("--disallowedTools", process.env.CLAUDE_DISALLOWED_TOOLS);
+        }
+        if (process.env.CLAUDE_EXTRA_ARGS) {
+          args.push(...process.env.CLAUDE_EXTRA_ARGS.split(/\s+/).filter(Boolean));
+        }
+
+        args.push(prompt);
+        return args;
+      }
+
+      function summarizeStreamJson(line) {
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "assistant" && event.message?.content) {
+            const text = event.message.content
+              .filter((item) => item.type === "text")
+              .map((item) => item.text)
+              .join(" ")
+              .trim();
+            if (text) return `assistant: ${text.slice(0, 180)}`;
+          }
+          if (event.type === "tool_use" || event.type === "tool_result") {
+            return `${event.type}: ${event.name || event.tool_name || event.id || "tool"}`;
+          }
+          if (event.type) return event.type;
+        } catch {
+          return line.slice(0, 180);
+        }
+        return "";
+      }
+
+      function extractClaudeOutput(stdout) {
+        const assistantTexts = [];
+        let resultText = "";
+        for (const line of stdout.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            if (typeof event.result === "string" && event.result.trim()) {
+              resultText = event.result.trim();
+            }
+            if (event.type === "assistant" && event.message?.content) {
+              const text = event.message.content
+                .filter((item) => item.type === "text")
+                .map((item) => item.text)
+                .join("")
+                .trim();
+              if (text) assistantTexts.push(text);
+            }
+          } catch {
+            continue;
+          }
+        }
+        return resultText || assistantTexts.join("\n\n") || stdout.trim();
+      }
+
+      async function runClaude(prompt, sessionId, resumeSession, extraAllowedTools = [], hooks = {}) {
+        const timeoutSeconds = Number.parseInt(process.env.CLAUDE_TIMEOUT_SECONDS || "600", 10);
+        const args = claudeArgs(prompt, sessionId, resumeSession, extraAllowedTools);
+        const runId = hooks.runId || crypto.randomUUID().slice(0, 8);
+        const startedAt = Date.now();
+        const env = { ...process.env, ...(hooks.env || {}) };
+
+        return await new Promise((resolve, reject) => {
+          log("info", "claude_start", {
+            runId,
+            sessionId,
+            resumeSession,
+            extraAllowedTools,
+            timeoutSeconds,
+            home: env.HOME,
+            args: args.filter((arg) => arg !== prompt),
+          });
+
+          const child = spawn("claude", args, {
+            cwd: "/workspace",
+            env,
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+
+          let stdout = "";
+          let stderr = "";
+          let stdoutBuffer = "";
+          const timer = setTimeout(() => {
+            child.kill("SIGTERM");
+            log("warn", "claude_timeout", { runId, elapsedMs: Date.now() - startedAt });
+            reject(new Error(`Claude Code timed out after ${timeoutSeconds}s`));
+          }, timeoutSeconds * 1000);
+
+          child.stdout.on("data", (chunk) => {
+            const text = chunk.toString();
+            stdout += text;
+            stdoutBuffer += text;
+            let newlineIndex;
+            while ((newlineIndex = stdoutBuffer.indexOf("\n")) >= 0) {
+              const line = stdoutBuffer.slice(0, newlineIndex).trim();
+              stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+              if (!line) continue;
+              const summary = summarizeStreamJson(line);
+              log("debug", "claude_stdout", { runId, summary });
+              hooks.onProgress?.(summary);
+            }
+          });
+          child.stderr.on("data", (chunk) => {
+            const text = chunk.toString();
+            stderr += text;
+            log("warn", "claude_stderr", { runId, text: text.slice(0, 1000) });
+            hooks.onStderr?.(text);
+          });
+          child.on("error", (error) => {
+            clearTimeout(timer);
+            log("error", "claude_spawn_error", { runId, error: error.message });
+            reject(error);
+          });
+          child.on("close", (code) => {
+            clearTimeout(timer);
+            log(code === 0 ? "info" : "error", "claude_exit", {
+              runId,
+              code,
+              elapsedMs: Date.now() - startedAt,
+              stdoutBytes: stdout.length,
+              stderrBytes: stderr.length,
+            });
+            if (code === 0) resolve(extractClaudeOutput(stdout));
+            else reject(new Error(`Claude Code exited ${code}: ${stderr || extractClaudeOutput(stdout) || stdout}`));
+          });
+        });
+      }
+
+      function createSlackProgress({ client, channel, threadTs, runId }) {
+        if (!isEnabled(process.env.CLAUDE_SLACK_PROGRESS)) {
+          return {
+            progress: () => {},
+            stderr: () => {},
+            stop: () => {},
+          };
+        }
+
+        const intervalSeconds = Number.parseInt(process.env.CLAUDE_SLACK_PROGRESS_INTERVAL_SECONDS || "20", 10);
+        const includeStderr = isEnabled(process.env.CLAUDE_INCLUDE_STDERR_IN_SLACK);
+        const recent = [];
+        let lastPostedAt = 0;
+        let stopped = false;
+
+        async function post(force = false) {
+          if (stopped) return;
+          const now = Date.now();
+          if (!force && now - lastPostedAt < intervalSeconds * 1000) return;
+          lastPostedAt = now;
+          const details = recent.slice(-5).filter(Boolean).join("\n");
+          await client.chat.postMessage({
+            channel,
+            thread_ts: threadTs,
+            text: details ? `Claude Code still running (${runId})...\n${details}` : `Claude Code still running (${runId})...`,
+          });
+        }
+
+        const timer = setInterval(() => {
+          void post(true).catch((error) => log("warn", "slack_progress_failed", { runId, error: error.message }));
+        }, intervalSeconds * 1000);
+
+        return {
+          progress: (summary) => {
+            if (!summary) return;
+            recent.push(summary);
+            void post(false).catch((error) => log("warn", "slack_progress_failed", { runId, error: error.message }));
+          },
+          stderr: (text) => {
+            if (!includeStderr || !text) return;
+            recent.push(`stderr: ${text.slice(0, 180).trim()}`);
+            void post(false).catch((error) => log("warn", "slack_progress_failed", { runId, error: error.message }));
+          },
+          stop: () => {
+            stopped = true;
+            clearInterval(timer);
+          },
+        };
+      }
+
+      function needsWebFetchApproval(output) {
+        const text = (output || "").toLowerCase();
+        return text.includes("web fetch permissions") || text.includes("webfetch") && text.includes("permission");
+      }
+
+      function needsShellNetworkApproval(output) {
+        const text = (output || "").toLowerCase();
+        const mentionsNetworkCommand = text.includes("curl") || text.includes("wget");
+        const mentionsPermission = text.includes("permission") || text.includes("not allowed") || text.includes("allowedtools") || text.includes("allowed tools");
+        return mentionsNetworkCommand && mentionsPermission;
+      }
+
+      async function postToolApproval({ client, channel, threadTs, key, prompt, sessionId, text, buttonText, actionId, tools, claudeEnv }) {
+        const approvalId = crypto.randomUUID();
+        pendingApprovals.set(approvalId, {
+          channel,
+          threadTs,
+          key,
+          prompt,
+          sessionId,
+          tools,
+          claudeEnv,
+          createdAt: Date.now(),
+        });
+
+        await client.chat.postMessage({
+          channel,
+          thread_ts: threadTs,
+          text,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text,
+              },
+            },
+            {
+              type: "actions",
+              elements: [
+                {
+                  type: "button",
+                  text: {
+                    type: "plain_text",
+                    text: buttonText,
+                  },
+                  style: "primary",
+                  action_id: actionId,
+                  value: approvalId,
+                },
+              ],
+            },
+          ],
+        });
+      }
+
+      async function handleClaudeRequest({ event, client, say, requireActiveThread = false }) {
+        if (event.bot_id || event.subtype) return;
+
+        const key = threadKey(event);
+        let resumeSession = activeThreads.has(key);
+        if (requireActiveThread && !activeThreads.has(key)) {
+          if (!event.thread_ts) return;
+          const messages = await getThreadMessages(client, event);
+          if (!botWasInThread(messages)) return;
+          activeThreads.add(key);
+          resumeSession = true;
+        } else if (!activeThreads.has(key) && event.thread_ts) {
+          const messages = await getThreadMessages(client, event);
+          if (botWasInThread(messages)) {
+            activeThreads.add(key);
+            resumeSession = true;
+          }
+        }
+
+        if (inFlight.has(key)) {
+          await say({ text: "A Claude Code run is already active for this thread.", thread_ts: event.thread_ts || event.ts });
+          return;
+        }
+
+        const userPrompt = stripBotMention(event.text || "");
+        if (!userPrompt) return;
+
+        inFlight.add(key);
+        activeThreads.add(key);
+        const threadTs = event.thread_ts || event.ts;
+        const sessionId = uuidFromKey(key);
+        const runId = crypto.randomUUID().slice(0, 8);
+
+        try {
+          const slackUserName = await resolveSlackUserName(client, event.user);
+          const claudeEnv = prepareMem0Env(sessionId, slackUserName);
+          log("info", "slack_request", {
+            runId,
+            channel: event.channel,
+            threadTs,
+            sessionId,
+            resumeSession,
+            user: event.user,
+            userName: slackUserName,
+          });
+          await say({ text: "Running Claude Code...", thread_ts: threadTs });
+          const threadMessages = await getThreadMessages(client, { ...event, thread_ts: threadTs });
+          const thread = formatThread(threadMessages);
+          const prompt = trimPrompt([
+            "Slack request:",
+            `Requester: ${slackUserName}`,
+            userPrompt,
+            "",
+            thread ? "Recent Slack thread context:" : "",
+            thread,
+          ].filter(Boolean).join("\n"));
+
+          const progress = createSlackProgress({ client, channel: event.channel, threadTs, runId });
+          let output;
+          try {
+            output = await runClaude(prompt, sessionId, resumeSession, [], {
+              runId,
+              env: claudeEnv,
+              onProgress: progress.progress,
+              onStderr: progress.stderr,
+            });
+          } finally {
+            progress.stop();
+          }
+          if (needsWebFetchApproval(output)) {
+            await postToolApproval({
+              client,
+              channel: event.channel,
+              threadTs,
+              key,
+              prompt,
+              sessionId,
+              text: "Claude Code needs permission to fetch a web page for this request.",
+              buttonText: "Allow web fetch and retry",
+              actionId: "approve_tool_retry",
+              tools: ["WebFetch"],
+              claudeEnv,
+            });
+            return;
+          }
+          if (needsShellNetworkApproval(output)) {
+            await postToolApproval({
+              client,
+              channel: event.channel,
+              threadTs,
+              key,
+              prompt,
+              sessionId,
+              text: "Claude Code needs permission to run a network fetch command for this request.",
+              buttonText: "Allow curl/wget and retry",
+              actionId: "approve_tool_retry",
+              tools: ["Bash(curl *)", "Bash(wget *)"],
+              claudeEnv,
+            });
+            return;
+          }
+          for (const chunk of splitSlackText(output)) {
+            await say({ text: chunk, thread_ts: threadTs });
+          }
+        } catch (error) {
+          await say({
+            text: `Claude Code failed: ${error.message}`,
+            thread_ts: threadTs,
+          });
+        } finally {
+          inFlight.delete(key);
+        }
+      }
+
+      app.event("app_mention", async ({ event, client, say }) => {
+        void handleClaudeRequest({ event, client, say });
+      });
+
+      app.message(async ({ message, client, say }) => {
+        if (message.channel_type === "im") {
+          void handleClaudeRequest({ event: message, client, say });
+        } else if (message.thread_ts && !(message.text || "").includes(`<@${botUserId}>`)) {
+          void handleClaudeRequest({ event: message, client, say, requireActiveThread: true });
+        }
+      });
+
+      app.action("approve_tool_retry", async ({ ack, body, action, client }) => {
+        await ack();
+
+        const approval = pendingApprovals.get(action.value);
+        if (!approval) {
+          await client.chat.postMessage({
+            channel: body.channel.id,
+            thread_ts: body.message.thread_ts || body.message.ts,
+            text: "That approval request is no longer available. Please ask again in the thread.",
+          });
+          return;
+        }
+
+        pendingApprovals.delete(action.value);
+
+        if (inFlight.has(approval.key)) {
+          await client.chat.postMessage({
+            channel: approval.channel,
+            thread_ts: approval.threadTs,
+            text: "A Claude Code run is already active for this thread.",
+          });
+          return;
+        }
+
+        inFlight.add(approval.key);
+        activeThreads.add(approval.key);
+        const runId = crypto.randomUUID().slice(0, 8);
+        try {
+          await client.chat.postMessage({
+            channel: approval.channel,
+            thread_ts: approval.threadTs,
+            text: `Approved. Retrying with ${approval.tools.join(", ")} enabled... (${runId})`,
+          });
+
+          const progress = createSlackProgress({ client, channel: approval.channel, threadTs: approval.threadTs, runId });
+          let output;
+          try {
+            output = await runClaude(approval.prompt, approval.sessionId, true, approval.tools, {
+              runId,
+              env: approval.claudeEnv,
+              onProgress: progress.progress,
+              onStderr: progress.stderr,
+            });
+          } finally {
+            progress.stop();
+          }
+          for (const chunk of splitSlackText(output)) {
+            await client.chat.postMessage({
+              channel: approval.channel,
+              thread_ts: approval.threadTs,
+              text: chunk,
+            });
+          }
+        } catch (error) {
+          await client.chat.postMessage({
+            channel: approval.channel,
+            thread_ts: approval.threadTs,
+            text: `Claude Code failed after approval: ${error.message}`,
+          });
+        } finally {
+          inFlight.delete(approval.key);
+        }
+      });
+
+      await app.start();
+      console.log("Claude Code Slack bridge started in Socket Mode");
+      EOF
+
+      ENV HOME=/home/claude
+      ENV CLAUDE_CONFIG_DIR=/home/claude/.claude
+      ENV PATH=/opt/slack-claude/node_modules/.bin:$PATH
+
+      USER 1001
+
+      CMD ["node", "/opt/slack-claude/server.mjs"]
+  strategy:
+    type: Docker
+  output:
+    to:
+      kind: ImageStreamTag
+      name: {{ printf "%s:%s" (include "claude-code-slack.fullname" .) .Values.build.imageTag | quote }}
+{{- end }}

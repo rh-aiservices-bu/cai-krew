@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "claude-code-slack.fullname" . }}
+  labels:
+    {{- include "claude-code-slack.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "claude-code-slack.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "claude-code-slack.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.mem0.enabled }}
+      initContainers:
+        - name: install-mem0-plugin
+          image: {{ include "claude-code-slack.image" . | quote }}
+          imagePullPolicy: {{ ternary "Always" .Values.image.pullPolicy .Values.build.enabled }}
+          command:
+            - /bin/bash
+            - -lc
+            - |-
+              set -euo pipefail
+              rm -rf /opt/cai-krew/*
+              git clone --depth 1 {{ .Values.mem0.repoUrl | quote }} /opt/cai-krew
+              {{- if .Values.mem0.repoRef }}
+              git -C /opt/cai-krew fetch --depth 1 origin {{ .Values.mem0.repoRef | quote }}
+              git -C /opt/cai-krew checkout FETCH_HEAD
+              {{- end }}
+              python3 -m venv {{ printf "%s/.venv" .Values.mem0.pluginPath | quote }}
+              {{ printf "%s/.venv/bin/pip" .Values.mem0.pluginPath }} install --no-cache-dir httpx
+          volumeMounts:
+            - name: mem0-plugin
+              mountPath: /opt/cai-krew
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: slack-bridge
+          image: {{ include "claude-code-slack.image" . | quote }}
+          imagePullPolicy: {{ ternary "Always" .Values.image.pullPolicy .Values.build.enabled }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "claude-code-slack.fullname" . }}-config
+            - secretRef:
+                name: {{ include "claude-code-slack.secretName" . }}
+          volumeMounts:
+            - name: home
+              mountPath: /home/claude
+            - name: workspace
+              mountPath: /workspace
+            {{- if .Values.claude.settings.enabled }}
+            - name: claude-settings
+              mountPath: {{ .Values.claude.settings.path | quote }}
+              subPath: settings.json
+              readOnly: true
+            {{- end }}
+            {{- if .Values.mem0.enabled }}
+            - name: mem0-env
+              mountPath: {{ .Values.mem0.envSourcePath | quote }}
+              subPath: mem0.env
+              readOnly: true
+            - name: mem0-plugin
+              mountPath: /opt/cai-krew
+            {{- end }}
+          workingDir: /workspace
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: home
+          {{- if .Values.persistence.home.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "claude-code-slack.fullname" . }}-home
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: workspace
+          {{- if .Values.persistence.workspace.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "claude-code-slack.fullname" . }}-workspace
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.claude.settings.enabled }}
+        - name: claude-settings
+          configMap:
+            name: {{ include "claude-code-slack.fullname" . }}-claude-settings
+        {{- end }}
+        {{- if .Values.mem0.enabled }}
+        - name: mem0-env
+          secret:
+            secretName: {{ include "claude-code-slack.mem0SecretName" . }}
+        - name: mem0-plugin
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

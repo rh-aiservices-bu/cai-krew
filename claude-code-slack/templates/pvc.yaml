@@ -1,0 +1,35 @@
+{{- if .Values.persistence.home.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "claude-code-slack.fullname" . }}-home
+  labels:
+    {{- include "claude-code-slack.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.home.accessModes | nindent 4 }}
+  {{- if .Values.persistence.home.storageClassName }}
+  storageClassName: {{ .Values.persistence.home.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.home.size | quote }}
+{{- end }}
+---
+{{- if .Values.persistence.workspace.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "claude-code-slack.fullname" . }}-workspace
+  labels:
+    {{- include "claude-code-slack.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.workspace.accessModes | nindent 4 }}
+  {{- if .Values.persistence.workspace.storageClassName }}
+  storageClassName: {{ .Values.persistence.workspace.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.workspace.size | quote }}
+{{- end }}
