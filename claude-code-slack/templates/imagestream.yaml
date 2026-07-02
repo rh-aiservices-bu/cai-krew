@@ -1,0 +1,11 @@
+{{- if .Values.build.enabled }}
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: {{ include "claude-code-slack.fullname" . }}
+  labels:
+    {{- include "claude-code-slack.labels" . | nindent 4 }}
+spec:
+  lookupPolicy:
+    local: true
+{{- end }}

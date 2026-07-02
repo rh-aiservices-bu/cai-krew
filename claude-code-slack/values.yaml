@@ -1,0 +1,141 @@
+replicaCount: 1
+
+slack:
+  botToken: "xoxb.."
+  appToken: "xapp..."
+  createSecret: true
+  existingSecret: ""
+
+anthropic:
+  baseUrl: "<your-url>"
+  model: "<model-name>"
+  apiKey: "<key>"
+
+claude:
+  permissionMode: "acceptEdits"
+  outputFormat: "text"
+  timeoutSeconds: 600
+  maxPromptChars: 24000
+  logging:
+    level: "info"
+    slackProgress: false
+    slackProgressIntervalSeconds: 20
+    includeStderrInSlack: false
+  extraArgs: []
+  allowedTools: []
+  disallowedTools: []
+  settings:
+    enabled: true
+    path: "/etc/claude/settings.json"
+    permissions:
+      allow:
+        - "WebFetch"
+        - "Bash(curl *)"
+        - "Bash(wget *)"
+        - "Bash(git clone *)"
+        - "Bash(git fetch *)"
+        - "Bash(git pull *)"
+        - "Bash(git ls-remote *)"
+        - "Bash(git -C * status *)"
+        - "Bash(git -C * branch *)"
+        - "Bash(git -C * remote *)"
+        - "Bash(git -C * rev-parse *)"
+        - "Bash(git -C * log *)"
+        - "Bash(git -C * show *)"
+        - "Bash(git -C * diff *)"
+        - "Bash(git -C * grep *)"
+        - "Bash(git -C * ls-files *)"
+        - "Bash(git status *)"
+        - "Bash(git branch *)"
+        - "Bash(git remote *)"
+        - "Bash(git rev-parse *)"
+        - "Bash(git log *)"
+        - "Bash(git show *)"
+        - "Bash(git diff *)"
+        - "Bash(git grep *)"
+        - "Bash(git ls-files *)"
+        - "Bash(pwd)"
+        - "Bash(ls)"
+        - "Bash(ls *)"
+        - "Bash(find)"
+        - "Bash(find *)"
+        - "Bash(rg)"
+        - "Bash(rg *)"
+        - "Bash(grep)"
+        - "Bash(grep *)"
+        - "Bash(cat *)"
+        - "Bash(sed *)"
+        - "Bash(awk *)"
+        - "Bash(head)"
+        - "Bash(head *)"
+        - "Bash(tail)"
+        - "Bash(tail *)"
+        - "Bash(nl *)"
+        - "Bash(wc)"
+        - "Bash(wc *)"
+        - "Bash(du)"
+        - "Bash(du *)"
+        - "Bash(tree)"
+        - "Bash(tree *)"
+      deny: []
+  appendSystemPrompt: |-
+    You are Claude Code running from Slack. Keep Slack replies concise. When you edit files or run commands, summarize what changed and include paths.
+
+mem0:
+  enabled: true
+  repoUrl: "https://github.com/rh-aiservices-bu/cai-krew.git"
+  repoRef: ""
+  pluginPath: "/opt/cai-krew/claude-code-plugin"
+  envSourcePath: "/etc/mem0/mem0.env"
+  envTargetPath: "/home/claude/.claude/mem0.env"
+  sessionHomeRoot: "/home/claude/sessions"
+  createSecret: true
+  existingSecret: ""
+  url: "<MEM0_URL>"
+  userId: ""
+  userIdFallback: "Slack User"
+  agentId: "flaude"
+  customInstructions: >-
+    Always refer to the user by their actual name in stored memories. The user's
+    name can be derived from the user_id field. Never use generic terms like
+    User or The user. When a new fact relates to the same subject as an existing
+    memory, prefer UPDATE over ADD and merge the information into a single
+    consolidated memory. Only use ADD when the fact is genuinely new with no
+    overlap.
+
+build:
+  enabled: true
+  imageTag: "latest"
+
+image:
+  repository: "quay.io/ckavili/claude-code-slack"
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+persistence:
+  home:
+    enabled: true
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+  workspace:
+    enabled: true
+    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+
+resources: {}
+
+podSecurityContext: {}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

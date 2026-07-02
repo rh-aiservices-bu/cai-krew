@@ -1,0 +1,39 @@
+{{- if .Values.claude.settings.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "claude-code-slack.fullname" . }}-claude-settings
+  labels:
+    {{- include "claude-code-slack.labels" . | nindent 4 }}
+data:
+  settings.json: |-
+    {
+      "permissions": {
+        "allow": {{ .Values.claude.settings.permissions.allow | toJson }},
+        "deny": {{ .Values.claude.settings.permissions.deny | toJson }}
+      }{{- if .Values.mem0.enabled }},
+      "hooks": {
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": {{ printf "/opt/slack-claude/mem0_prefetch_wrapper.py %s/.venv/bin/python %s/mem0_prefetch.py" .Values.mem0.pluginPath .Values.mem0.pluginPath | quote }}
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": {{ printf "%s/.venv/bin/python %s/mem0_sync.py" .Values.mem0.pluginPath .Values.mem0.pluginPath | quote }}
+              }
+            ]
+          }
+        ]
+      }
+      {{- end }}
+    }
+{{- end }}
