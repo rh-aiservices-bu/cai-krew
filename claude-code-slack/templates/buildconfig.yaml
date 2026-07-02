@@ -111,7 +111,7 @@ spec:
 
       RUN cat > /opt/slack-claude/server.mjs <<'EOF'
       import { App } from "@slack/bolt";
-      import { spawn } from "node:child_process";
+      import { spawn, spawnSync } from "node:child_process";
       import crypto from "node:crypto";
       import fs from "node:fs";
       import path from "node:path";
@@ -401,6 +401,42 @@ spec:
         return resultText || assistantTexts.join("\n\n") || stdout.trim();
       }
 
+      function prefetchMem0Context({ sessionId, prompt, env, runId }) {
+        if (!isEnabled(process.env.MEM0_ENABLED)) return "";
+        const pluginPath = process.env.MEM0_PLUGIN_PATH || "/opt/cai-krew/claude-code-plugin";
+        const args = [
+          "/opt/slack-claude/mem0_prefetch_wrapper.py",
+          `${pluginPath}/.venv/bin/python`,
+          `${pluginPath}/mem0_prefetch.py`,
+        ];
+        const input = JSON.stringify({ session_id: sessionId, prompt });
+        try {
+          const result = spawnSync(args[0], args.slice(1), {
+            input,
+            encoding: "utf8",
+            env: { ...process.env, ...env },
+            maxBuffer: 1024 * 1024,
+          });
+          const output = result.stdout || "";
+          log("info", "mem0_prefetch_bridge", {
+            runId,
+            sessionId,
+            code: result.status,
+            stdoutBytes: output.length,
+            stderrBytes: (result.stderr || "").length,
+            injected: Boolean(output.trim()),
+          });
+          if (result.error) {
+            log("warn", "mem0_prefetch_bridge_error", { runId, sessionId, error: result.error.message });
+            return "";
+          }
+          return output.trim();
+        } catch (error) {
+          log("warn", "mem0_prefetch_bridge_failed", { runId, sessionId, error: error.message });
+          return "";
+        }
+      }
+
       async function runClaude(prompt, sessionId, resumeSession, extraAllowedTools = [], hooks = {}) {
         const timeoutSeconds = Number.parseInt(process.env.CLAUDE_TIMEOUT_SECONDS || "600", 10);
         const args = claudeArgs(prompt, sessionId, resumeSession, extraAllowedTools);
@@ -628,7 +664,16 @@ spec:
           await say({ text: "Running Claude Code...", thread_ts: threadTs });
           const threadMessages = await getThreadMessages(client, { ...event, thread_ts: threadTs });
           const thread = formatThread(threadMessages);
+          const memoryContext = prefetchMem0Context({
+            sessionId,
+            prompt: userPrompt,
+            env: claudeEnv,
+            runId,
+          });
           const prompt = trimPrompt([
+            memoryContext ? "Relevant long-term memory:" : "",
+            memoryContext,
+            memoryContext ? "" : "",
             "Slack request:",
             `Requester: ${slackUserName}`,
             userPrompt,
