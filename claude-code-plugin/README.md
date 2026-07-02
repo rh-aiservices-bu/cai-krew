@@ -11,7 +11,7 @@ Adds long-term memory to Claude Code via two hooks:
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/cai-krew/cai-krew.git
+git clone https://github.com/rh-aiservices-bu/cai-krew.git
 cd cai-krew
 ```
 
