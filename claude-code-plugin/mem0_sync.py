@@ -77,8 +77,12 @@ def _get_last_turn(jsonl_path: Path) -> tuple[str | None, str | None]:
                 asst_text = text
 
         elif asst_text is not None and etype == "user":
-            if isinstance(content, str) and content.strip():
-                user_text = content.strip()
+            # Real prompts may be stored as a plain string OR a list of
+            # content blocks. _extract_text() returns "" for tool-result-only
+            # turns, so those are still skipped correctly.
+            text = _extract_text(content)
+            if text:
+                user_text = text
                 break
 
     return user_text, asst_text
