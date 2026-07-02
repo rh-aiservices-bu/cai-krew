@@ -38,6 +38,22 @@ def _find_session_jsonl(session_id: str) -> Path | None:
     return None
 
 
+def _extract_text(content) -> str:
+    """Text of a message whether stored as a string or a list of blocks.
+
+    Returns "" for tool-result-only turns (no text blocks), so they are
+    naturally skipped as "not a real user message".
+    """
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return " ".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ).strip()
+    return ""
+
+
 def _last_user_text(jsonl_path: Path) -> str | None:
     """Return the text of the most recent human-typed user message."""
     last = None
@@ -49,9 +65,9 @@ def _last_user_text(jsonl_path: Path) -> str | None:
         if entry.get("type") != "user":
             continue
         content = entry.get("message", {}).get("content", "")
-        # Plain string → real user message (not a tool result)
-        if isinstance(content, str) and content.strip():
-            last = content.strip()
+        text = _extract_text(content)
+        if text:
+            last = text
     return last
 
 
