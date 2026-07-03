@@ -3,10 +3,25 @@
 Mirrors the personal/team split used in the mem0_oss plugin for consistency:
 - personal: focused on individual facts, preferences, and experiences
 - team: focused on project decisions, technical standards, and shared knowledge
+
+Prompts can be overridden at runtime by mounting a ConfigMap to /app/prompts/:
+  personal_system.txt  → overrides _PERSONAL_SYSTEM
+  team_system.txt      → overrides _TEAM_SYSTEM
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Dict, List
+
+_PROMPTS_DIR = Path(os.getenv("LOREKEEPER_PROMPTS_DIR", "/app/prompts"))
+
+
+def _load_prompt(filename: str, default: str) -> str:
+    path = _PROMPTS_DIR / filename
+    if path.is_file():
+        return path.read_text()
+    return default
 
 
 def _format_memories(memories: List[Dict]) -> str:
@@ -26,7 +41,7 @@ def _format_memories(memories: List[Dict]) -> str:
 
 # ── Personal ──────────────────────────────────────────────────────────────────
 
-_PERSONAL_SYSTEM = """\
+_PERSONAL_SYSTEM_DEFAULT = """\
 You are a memory curator for a personal AI assistant memory store.
 Your job is to review a batch of personal memories and identify redundancy,
 contradiction, and opportunities to consolidate.
@@ -42,9 +57,12 @@ Rules:
 - Prefer more specific and more recent memories over vague or older ones.
 - If two memories express the same fact differently, DELETE the weaker one.
 - If two memories directly contradict each other, DELETE the older one (use created date).
-- If 2-3 closely related memories can be expressed as one complete sentence without
-  losing information, MERGE them.
+- If any number of closely related memories can be expressed as one concise statement
+  without losing information, MERGE them — there is no limit on how many can be combined.
 - Do NOT merge memories that cover clearly distinct topics just because they share a subject.
+- DELETE memories that describe transient states with no lasting value: waiting on a
+  process, standing by, a one-off question that was fully answered in the same session.
+  If the memory would be meaningless a week later, delete it.
 - Keep memory IDs exactly as shown in the id="..." field — never invent or shorten them.
 - If nothing needs changing in this batch, return {"actions": []}.
 
@@ -55,6 +73,8 @@ Output format (JSON, no markdown fences):
     {"action": "MERGE", "ids": ["<uuid1>", "<uuid2>"], "new_text": "<merged statement>", "reason": "<one sentence>"}
   ]
 }"""
+
+_PERSONAL_SYSTEM = _load_prompt("personal_system.txt", _PERSONAL_SYSTEM_DEFAULT)
 
 
 def personal_pruning_messages(actor_key: str, memories: List[Dict]) -> List[Dict[str, str]]:
@@ -75,7 +95,7 @@ def personal_pruning_messages(actor_key: str, memories: List[Dict]) -> List[Dict
 
 # ── Team ──────────────────────────────────────────────────────────────────────
 
-_TEAM_SYSTEM = """\
+_TEAM_SYSTEM_DEFAULT = """\
 You are a memory curator for a shared team knowledge base.
 Team memories capture project decisions, technical standards, architecture choices,
 shared processes, and domain knowledge relevant to the whole team.
@@ -94,6 +114,9 @@ Rules:
 - If two memories state the same decision differently, DELETE the less precise one.
 - If a memory is superseded by a newer decision on the same topic in this batch,
   DELETE the older one (use created date to determine which is newer).
+- If any number of memories cover the same topic or decision thread and can be expressed
+  as one authoritative statement without losing information, MERGE them — there is no
+  limit on how many can be combined.
 - Keep memory IDs exactly as shown in the id="..." field — never invent or shorten them.
 - If nothing needs changing in this batch, return {"actions": []}.
 
@@ -104,6 +127,8 @@ Output format (JSON, no markdown fences):
     {"action": "MERGE", "ids": ["<uuid1>", "<uuid2>"], "new_text": "<merged statement>", "reason": "<one sentence>"}
   ]
 }"""
+
+_TEAM_SYSTEM = _load_prompt("team_system.txt", _TEAM_SYSTEM_DEFAULT)
 
 
 def team_pruning_messages(memories: List[Dict]) -> List[Dict[str, str]]:

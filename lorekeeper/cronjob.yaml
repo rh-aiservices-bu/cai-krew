@@ -65,3 +65,15 @@ spec:
             # When omitted, actor keys are discovered automatically via GET /memories.
             # - name: MEM0_ACTOR_KEYS
             #   value: "hermes|alice,hermes|bob"
+            # Optional: override prompt directory (default: /app/prompts)
+            # - name: LOREKEEPER_PROMPTS_DIR
+            #   value: "/app/prompts"
+            volumeMounts:
+            - name: prompts
+              mountPath: /app/prompts
+              readOnly: true
+          volumes:
+          - name: prompts
+            configMap:
+              name: lorekeeper-prompts
+              optional: true   # pod still starts if the ConfigMap doesn't exist
