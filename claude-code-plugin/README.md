@@ -37,7 +37,7 @@ You'll use this path in the next steps — replace `/path/to/claude-code-plugin`
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install httpx
+.venv/bin/pip install httpx fastmcp
 ```
 
 ### 4. Configure mem0 credentials
@@ -86,6 +86,25 @@ Add to `~/.claude/settings.json` (global — all projects), replacing `/path/to/
 
 Or add to `<project>/.claude/settings.json` for project-scoped activation only.
 Both levels can coexist — they merge, not override.
+
+## Optional: active mem0 tools via MCP
+
+The hooks give Claude Code *passive* memory (injected before each message). If you also want Claude Code to actively search or browse memories mid-conversation, register `mem0_mcp.py` as an MCP server.
+
+Install the dependency and register it with the Claude Code CLI (run once):
+
+```bash
+pip3 install fastmcp --break-system-packages
+claude mcp add -s user mem0 python3 /path/to/claude-code-plugin/mem0_mcp.py
+```
+
+Credentials are loaded automatically from `~/.claude/mem0.env` — no extra config needed. Claude Code launches the server as a subprocess; nothing to start manually.
+
+To verify it's registered: `claude mcp list`
+
+This exposes two tools:
+- **`mem0_search(query)`** — three-tier search (personal / team / other actors)
+- **`mem0_profile()`** — list all stored memories for your user/agent pair
 
 ## How it works
 
