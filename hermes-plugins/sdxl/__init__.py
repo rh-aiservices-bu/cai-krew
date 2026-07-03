@@ -1,19 +1,23 @@
 """Stable Diffusion XL image generation backend.
 
-Calls any OpenAI-compatible /v1/images/generations endpoint (LiteLLM,
-Automatic1111 with the --api flag, etc.).
+Calls the custom async job API exposed by sdxl-predictor:
+  POST /generate              → {"job_id": "..."}
+  GET  /progress/{job_id}    → poll until {"status": "completed", "image": "<base64>"}
 
 Configure via environment variables (set in the .env secret):
-  SDXL_BASE_URL   LiteLLM base URL, e.g. https://litellm.example.com/v1
-  SDXL_API_KEY    API key (defaults to "none" for unauthenticated endpoints)
-  SDXL_MODEL      Model name as registered in LiteLLM (default: stable-diffusion-xl-base-1.0)
-  SDXL_TIMEOUT    Request timeout in seconds (default: 120)
+  SDXL_BASE_URL       Service base URL (default: http://sdxl-predictor.cai-crew.svc.cluster.local:8080)
+  SDXL_STEPS          Number of inference steps (default: 30)
+  SDXL_GUIDANCE_SCALE Guidance scale (default: 8.0)
+  SDXL_TIMEOUT        Total timeout in seconds for generation (default: 300)
+  SDXL_POLL_INTERVAL  Seconds between progress polls (default: 3)
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -24,25 +28,23 @@ from agent.image_gen_provider import (
     error_response,
     resolve_aspect_ratio,
     save_b64_image,
-    save_url_image,
     success_response,
 )
 
 logger = logging.getLogger(__name__)
 
-# SDXL native resolutions that most schedulers handle well.
-_SIZES: Dict[str, str] = {
-    "landscape": "1216x832",
-    "square": "1024x1024",
-    "portrait": "832x1216",
-}
+_DEFAULT_BASE_URL = "http://sdxl-predictor.cai-crew.svc.cluster.local:8080"
 
-_DEFAULT_MODEL = "stable-diffusion-xl-base-1.0"
-_DEFAULT_TIMEOUT = 120.0
+# SDXL native resolutions
+_SIZES: Dict[str, tuple] = {
+    "landscape": (1216, 832),
+    "square":    (1024, 1024),
+    "portrait":  (832, 1216),
+}
 
 
 class SDXLImageGenProvider(ImageGenProvider):
-    """Image generation via a self-hosted SDXL model exposed through LiteLLM."""
+    """Image generation via the in-cluster SDXL predictor service."""
 
     @property
     def name(self) -> str:
@@ -53,29 +55,46 @@ class SDXLImageGenProvider(ImageGenProvider):
         return "Stable Diffusion XL (cluster)"
 
     def _base_url(self) -> str:
-        return os.environ.get("SDXL_BASE_URL", "").rstrip("/")
+        return os.environ.get("SDXL_BASE_URL", _DEFAULT_BASE_URL).rstrip("/")
 
-    def _api_key(self) -> str:
-        return os.environ.get("SDXL_API_KEY", "none")
+    def _steps(self) -> int:
+        try:
+            return int(os.environ.get("SDXL_STEPS", 30))
+        except (TypeError, ValueError):
+            return 30
 
-    def _model(self) -> str:
-        return os.environ.get("SDXL_MODEL", _DEFAULT_MODEL)
+    def _guidance_scale(self) -> float:
+        try:
+            return float(os.environ.get("SDXL_GUIDANCE_SCALE", 8.0))
+        except (TypeError, ValueError):
+            return 8.0
 
     def _timeout(self) -> float:
         try:
-            return float(os.environ.get("SDXL_TIMEOUT", _DEFAULT_TIMEOUT))
+            return float(os.environ.get("SDXL_TIMEOUT", 300))
         except (TypeError, ValueError):
-            return _DEFAULT_TIMEOUT
+            return 300.0
+
+    def _poll_interval(self) -> float:
+        try:
+            return float(os.environ.get("SDXL_POLL_INTERVAL", 3))
+        except (TypeError, ValueError):
+            return 3.0
 
     def is_available(self) -> bool:
-        return bool(self._base_url())
+        # No auth required — just needs the base URL to be reachable
+        try:
+            resp = requests.get(f"{self._base_url()}/health", timeout=5)
+            return resp.status_code == 200
+        except Exception:
+            return False
 
     def list_models(self) -> List[Dict[str, Any]]:
         return [
             {
-                "id": self._model(),
+                "id": "stable-diffusion-xl",
                 "display": "Stable Diffusion XL",
-                "strengths": "Self-hosted, no per-image cost",
+                "strengths": "Self-hosted in-cluster, no per-image cost",
             }
         ]
 
@@ -83,11 +102,10 @@ class SDXLImageGenProvider(ImageGenProvider):
         return {
             "name": "Stable Diffusion XL (cluster)",
             "badge": "self-hosted",
-            "tag": "Self-hosted SDXL via LiteLLM — set SDXL_BASE_URL and SDXL_MODEL in .env",
+            "tag": "In-cluster SDXL via sdxl-predictor — set SDXL_BASE_URL if not in cai-crew namespace",
             "env_vars": [
-                {"key": "SDXL_BASE_URL", "prompt": "LiteLLM base URL (e.g. https://litellm.example.com/v1)"},
-                {"key": "SDXL_API_KEY", "prompt": "API key (leave blank if unauthenticated)"},
-                {"key": "SDXL_MODEL", "prompt": "Model name in LiteLLM"},
+                {"key": "SDXL_BASE_URL", "prompt": "Service base URL (default: in-cluster cai-crew address)"},
+                {"key": "SDXL_STEPS", "prompt": "Inference steps (default: 30)"},
             ],
         }
 
@@ -101,138 +119,121 @@ class SDXLImageGenProvider(ImageGenProvider):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         base_url = self._base_url()
-        if not base_url:
-            return error_response(
-                error="SDXL_BASE_URL is not set. Add it to your .env secret.",
-                error_type="missing_config",
-                provider=self.name,
-                aspect_ratio=aspect_ratio,
-            )
-
         aspect = resolve_aspect_ratio(aspect_ratio)
-        size = _SIZES.get(aspect, "1024x1024")
-        model = self._model()
+        width, height = _SIZES.get(aspect, (1024, 1024))
         timeout = self._timeout()
+        poll_interval = self._poll_interval()
 
-        payload: Dict[str, Any] = {
-            "model": model,
+        # --- Submit job ---
+        payload = {
             "prompt": prompt,
-            "n": 1,
-            "size": size,
-            "response_format": "b64_json",
-        }
-
-        headers = {
-            "Authorization": f"Bearer {self._api_key()}",
-            "Content-Type": "application/json",
+            "width": width,
+            "height": height,
+            "num_inference_steps": self._steps(),
+            "guidance_scale": self._guidance_scale(),
         }
 
         try:
-            response = requests.post(
-                f"{base_url}/images/generations",
-                headers=headers,
+            resp = requests.post(
+                f"{base_url}/generate",
                 json=payload,
-                timeout=timeout,
+                timeout=30,
             )
-            response.raise_for_status()
+            resp.raise_for_status()
         except requests.HTTPError as exc:
-            resp = exc.response
-            status = resp.status_code if resp is not None else 0
+            status = exc.response.status_code if exc.response is not None else 0
             try:
-                err_msg = resp.json().get("error", {}).get("message", resp.text[:300])
+                msg = exc.response.json()
             except Exception:
-                err_msg = resp.text[:300] if resp is not None else str(exc)
+                msg = exc.response.text[:300] if exc.response is not None else str(exc)
             return error_response(
-                error=f"SDXL request failed ({status}): {err_msg}",
+                error=f"SDXL /generate failed ({status}): {msg}",
                 error_type="api_error",
                 provider=self.name,
-                model=model,
                 prompt=prompt,
                 aspect_ratio=aspect,
             )
-        except requests.Timeout:
+        except Exception as exc:
             return error_response(
-                error=f"SDXL timed out after {int(timeout)}s — the model may still be warming up.",
-                error_type="timeout",
-                provider=self.name,
-                model=model,
-                prompt=prompt,
-                aspect_ratio=aspect,
-            )
-        except requests.ConnectionError as exc:
-            return error_response(
-                error=f"Could not reach SDXL endpoint at {base_url}: {exc}",
+                error=f"SDXL /generate request failed: {exc}",
                 error_type="connection_error",
                 provider=self.name,
-                model=model,
                 prompt=prompt,
                 aspect_ratio=aspect,
             )
 
         try:
-            result = response.json()
-        except Exception as exc:
+            job_id = resp.json()["job_id"]
+        except Exception:
             return error_response(
-                error=f"SDXL returned invalid JSON: {exc}",
+                error=f"SDXL returned unexpected response from /generate: {resp.text[:200]}",
                 error_type="invalid_response",
                 provider=self.name,
-                model=model,
                 prompt=prompt,
                 aspect_ratio=aspect,
             )
 
-        data = result.get("data") or []
-        if not data:
-            return error_response(
-                error="SDXL returned no image data.",
-                error_type="empty_response",
-                provider=self.name,
-                model=model,
-                prompt=prompt,
-                aspect_ratio=aspect,
-            )
+        logger.info("[sdxl] Job submitted: %s (%dx%d, %d steps)", job_id, width, height, self._steps())
 
-        first = data[0]
-        b64 = first.get("b64_json")
-        url = first.get("url")
-
-        if b64:
+        # --- Poll for completion ---
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(poll_interval)
             try:
-                saved_path = save_b64_image(b64, prefix="sdxl_gen")
+                poll_resp = requests.get(f"{base_url}/progress/{job_id}", timeout=15)
+                poll_resp.raise_for_status()
+                data = poll_resp.json()
             except Exception as exc:
-                return error_response(
-                    error=f"Could not save generated image: {exc}",
-                    error_type="io_error",
+                logger.warning("[sdxl] Poll error for job %s: %s", job_id, exc)
+                continue
+
+            status = data.get("status")
+            if status == "completed":
+                b64 = data.get("image")
+                if not b64:
+                    return error_response(
+                        error="SDXL job completed but returned no image data.",
+                        error_type="empty_response",
+                        provider=self.name,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                    )
+                try:
+                    saved_path = save_b64_image(b64, prefix="sdxl_gen")
+                except Exception as exc:
+                    return error_response(
+                        error=f"Could not save generated image: {exc}",
+                        error_type="io_error",
+                        provider=self.name,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                    )
+                logger.info("[sdxl] Job %s completed → %s", job_id, saved_path)
+                return success_response(
+                    image=str(saved_path),
+                    model="stable-diffusion-xl",
+                    prompt=prompt,
+                    aspect_ratio=aspect,
                     provider=self.name,
-                    model=model,
+                )
+            elif status in ("failed", "error"):
+                return error_response(
+                    error=f"SDXL job {job_id} failed: {data.get('message', 'unknown error')}",
+                    error_type="api_error",
+                    provider=self.name,
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
-            image_ref = str(saved_path)
-        elif url:
-            try:
-                saved_path = save_url_image(url, prefix="sdxl_gen")
-            except Exception as exc:
-                logger.warning("SDXL image URL could not be cached (%s); using bare URL.", exc)
-                image_ref = url
             else:
-                image_ref = str(saved_path)
-        else:
-            return error_response(
-                error="SDXL response contained neither b64_json nor url.",
-                error_type="empty_response",
-                provider=self.name,
-                model=model,
-                prompt=prompt,
-                aspect_ratio=aspect,
-            )
+                step = data.get("step", "?")
+                logger.debug("[sdxl] Job %s status=%s step=%s", job_id, status, step)
 
-        return success_response(
-            image=image_ref,
-            model=model,
+        return error_response(
+            error=f"SDXL job {job_id} timed out after {int(timeout)}s.",
+            error_type="timeout",
+            provider=self.name,
             prompt=prompt,
             aspect_ratio=aspect,
-            provider=self.name,
         )
 
 
