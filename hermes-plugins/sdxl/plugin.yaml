@@ -1,0 +1,7 @@
+name: sdxl
+version: 1.0.0
+description: "Self-hosted Stable Diffusion XL image generation via a LiteLLM-compatible /v1/images/generations endpoint."
+author: rh-aiservices-bu
+kind: backend
+requires_env:
+  - SDXL_BASE_URL
