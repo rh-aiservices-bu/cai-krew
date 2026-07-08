@@ -26,11 +26,11 @@ spec:
             - -c
             - |
               set -e
+              rm -rf /data/plugins
               mkdir -p /data/{skills,sessions,logs,memories,cache/models,mem0,plugins}
-              # Clone mem0_oss plugin (always pull latest)
-              rm -rf /data/plugins/mem0_oss
+              # Clone all plugins (always pull latest)
               git clone --depth 1 https://github.com/rh-aiservices-bu/cai-krew.git /tmp/cai-krew
-              cp -r /tmp/cai-krew/hermes-plugins/mem0_oss /data/plugins/mem0_oss
+              cp -r /tmp/cai-krew/hermes-plugins/* /data/plugins/
               # Always overwrite .env and SOUL.md from their sources
               cp /secrets/env/.env /data/.env
               cp /soul/SOUL.md /data/SOUL.md
