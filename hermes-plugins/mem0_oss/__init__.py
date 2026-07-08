@@ -289,29 +289,29 @@ It is correct and expected to return nothing most of the time."""
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        logger.debug("mem0_oss.prefetch(query=%r, session=%r) — cache=%s",
-                     query, session_id, bool(self._prefetch_cache))
+        logger.info("mem0_oss.prefetch(query=%r, session=%r) — cache=%s",
+                    query, session_id, bool(self._prefetch_cache))
         with self._lock:
             result, self._prefetch_cache = self._prefetch_cache, ""
         if result and result.strip():
-            logger.debug("mem0_oss.prefetch returning cached (%d chars)", len(result))
+            logger.info("mem0_oss.prefetch returning cached (%d chars)", len(result))
             return result
         # Turn 1 fallback: cache is empty because nothing was queued before the
         # first message. Run searches inline and return directly so turn 1 gets context.
         try:
             sections = []
             personal = self._search_personal(query, top_k=5)
-            logger.debug("mem0_oss.prefetch: personal search returned %d results", len(personal))
+            logger.info("mem0_oss.prefetch: personal=%d team=... (inline fallback)", len(personal))
             if personal:
                 lines = "\n".join(f"- {m.get('memory', m)}" for m in personal)
                 sections.append(f"## Your memories:\n{lines}")
             team = self._search_team(query, top_k=3)
-            logger.debug("mem0_oss.prefetch: team search returned %d results", len(team))
+            logger.info("mem0_oss.prefetch: team=%d", len(team))
             if team:
                 lines = "\n".join(f"- {m.get('memory', m)}" for m in team)
                 sections.append(f"## Team memories:\n{lines}")
             other = self._search_other_actors(query, top_k=3)
-            logger.debug("mem0_oss.prefetch: other actors search returned %d results", len(other))
+            logger.info("mem0_oss.prefetch: other=%d", len(other))
             if other:
                 lines = "\n".join(
                     f"- [{m.get('user_id', '?')}] {m.get('memory', m)}" for m in other
@@ -319,11 +319,11 @@ It is correct and expected to return nothing most of the time."""
                 sections.append(f"## Other memories (lower confidence):\n{lines}")
             if sections:
                 result = "\n\n".join(sections)
-                logger.debug("mem0_oss.prefetch returning %d chars", len(result))
+                logger.info("mem0_oss.prefetch returning %d chars:\n%s", len(result), result)
                 return result
         except Exception as exc:
             logger.error("mem0_oss.prefetch fallback FAILED: %s", exc, exc_info=True)
-        logger.debug("mem0_oss.prefetch returning empty string")
+        logger.info("mem0_oss.prefetch returning empty string (no results)")
         return ""
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
@@ -332,10 +332,12 @@ It is correct and expected to return nothing most of the time."""
 
     def _bg_prefetch(self, query: str) -> None:
         try:
-            logger.debug("mem0_oss._bg_prefetch(query=%r) starting", query)
+            logger.info("mem0_oss._bg_prefetch(query=%r) starting", query)
             personal = self._search_personal(query, top_k=5)
             team     = self._search_team(query, top_k=3)
             other    = self._search_other_actors(query, top_k=3)
+            logger.info("mem0_oss._bg_prefetch: personal=%d team=%d other=%d",
+                        len(personal), len(team), len(other))
             sections = []
             if personal:
                 lines = "\n".join(f"- {m.get('memory', m)}" for m in personal)
@@ -352,9 +354,9 @@ It is correct and expected to return nothing most of the time."""
                 result = "\n\n".join(sections)
                 with self._lock:
                     self._prefetch_cache = result
-                logger.debug("mem0_oss._bg_prefetch: cached %d chars", len(result))
+                logger.info("mem0_oss._bg_prefetch: cached %d chars:\n%s", len(result), result)
             else:
-                logger.debug("mem0_oss._bg_prefetch: no results for %r", query)
+                logger.info("mem0_oss._bg_prefetch: no results for %r", query)
         except Exception as exc:
             logger.error("mem0_oss._bg_prefetch FAILED: %s", exc, exc_info=True)
 
