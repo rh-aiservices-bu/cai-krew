@@ -35,6 +35,7 @@ import httpx
 from agent.memory_provider import MemoryProvider
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 _TIMEOUT       = 10.0   # read operations (search, get)
 _WRITE_TIMEOUT = 90.0   # write operations (add) — LLM extraction can take 30–60 s
