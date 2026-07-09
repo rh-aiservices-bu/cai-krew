@@ -31,6 +31,14 @@ spec:
               # Clone all plugins (always pull latest)
               git clone --depth 1 https://github.com/rh-aiservices-bu/cai-krew.git /tmp/cai-krew
               cp -r /tmp/cai-krew/hermes-plugins/* /data/plugins/
+              {{- if .Values.mlflow.trackingUri }}
+              HERMES_HOME=/data hermes plugins install briancaffey/hermes-otel || echo "WARN: hermes-otel install failed, tracing disabled"
+              HERMES_HOME=/data hermes plugins enable hermes_otel || echo "WARN: hermes-otel enable failed"
+              mkdir -p /data/plugins/hermes_otel
+              cp /hermes-otel/config.yaml /data/plugins/hermes_otel/config.yaml
+              SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              sed -i "s|__SA_TOKEN__|${SA_TOKEN}|g" /data/plugins/hermes_otel/config.yaml
+              {{- end }}
               # Always overwrite .env and SOUL.md from their sources
               cp /secrets/env/.env /data/.env
               cp /soul/SOUL.md /data/SOUL.md
@@ -48,6 +56,11 @@ spec:
             - name: soul
               mountPath: /soul
               readOnly: true
+            {{- if .Values.mlflow.trackingUri }}
+            - name: hermes-otel-config
+              mountPath: /hermes-otel
+              readOnly: true
+            {{- end }}
 
       containers:
         - name: hermes-agent
@@ -78,6 +91,11 @@ spec:
         - name: soul
           configMap:
             name: {{ .Values.agent.name }}-soul
+        {{- if .Values.mlflow.trackingUri }}
+        - name: hermes-otel-config
+          configMap:
+            name: {{ .Values.agent.name }}-hermes-otel
+        {{- end }}
         - name: hermes-data
           persistentVolumeClaim:
             claimName: {{ .Values.agent.name }}-data

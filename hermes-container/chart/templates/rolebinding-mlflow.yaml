@@ -1,0 +1,18 @@
+{{- if .Values.mlflow.trackingUri }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.agent.name }}-mlflow
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow-operator-mlflow-integration
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.agent.name }}
+    namespace: {{ .Values.agent.namespace }}
+{{- end }}

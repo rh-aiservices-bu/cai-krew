@@ -64,6 +64,11 @@ soul: |
   - Overexplaining things the team already knows
   - Verbose multi-paragraph responses when a sentence will do
 
+## MLflow tracing (optional) — leave trackingUri empty to disable
+mlflow:
+  trackingUri: ""      # e.g. https://rh-ai.apps.example.com/mlflow
+  experimentId: "0"   # MLflow experiment ID to route spans into
+
 ## PVC
 persistence:
   size: 5Gi
@@ -84,3 +89,5 @@ env:
   HERMES_PROFILE: default
   MEM0_DB_PATH: /app/.hermes/mem0
   OPENAI_BASE_URL: ""
+  HOME: /app  # ensures Path.home() == /app so plugins using ~/.hermes find HERMES_HOME
+  XDG_STATE_HOME: /app/.hermes/state  # redirects ~/.local/state → writable PVC path (avoids permission error on /app)
