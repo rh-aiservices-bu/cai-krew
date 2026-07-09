@@ -1,0 +1,26 @@
+{{- if .Values.mlflow.trackingUri }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.agent.name }}-hermes-otel
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+data:
+  config.yaml: |
+    enabled: true
+    force_flush_on_session_end: true
+    capture_sender_id: true
+    capture_conversation_history: true
+    backends:
+      - type: otlp
+        name: mlflow
+        endpoint: {{ .Values.mlflow.trackingUri | trimSuffix "/" }}/v1/traces
+        metrics: false
+        logs: false
+        headers:
+          x-mlflow-experiment-id: "{{ .Values.mlflow.experimentId }}"
+          Authorization: "Bearer __SA_TOKEN__"
+          X-MLflow-Workspace: "{{ .Values.agent.namespace }}"
+{{- end }}
