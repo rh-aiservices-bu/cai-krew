@@ -1,0 +1,24 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.build.enabled }}
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: {{ include "mem0.dashboard.fullname" . }}
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  source:
+    type: Git
+    git:
+      uri: {{ .Values.dashboard.build.gitUri | default .Values.server.build.gitUri }}
+      ref: {{ .Values.dashboard.build.gitRef }}
+    contextDir: {{ .Values.dashboard.build.contextDir }}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: {{ include "mem0.dashboard.fullname" . }}:{{ .Values.dashboard.build.imageTag }}
+{{- end }}

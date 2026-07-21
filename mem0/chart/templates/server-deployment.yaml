@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mem0.server.fullname" . }}
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  {{- if .Values.server.build.enabled }}
+  annotations:
+    image.openshift.io/triggers: |
+      [
+        {"from":{"kind":"ImageStreamTag","name":"{{ include "mem0.server.fullname" . }}:{{ .Values.server.build.imageTag }}"},"fieldPath":"spec.template.spec.initContainers[?(@.name==\"migrate\")].image"},
+        {"from":{"kind":"ImageStreamTag","name":"{{ include "mem0.server.fullname" . }}:{{ .Values.server.build.imageTag }}"},"fieldPath":"spec.template.spec.containers[?(@.name==\"mem0\")].image"}
+      ]
+  {{- end }}
+spec:
+  replicas: {{ .Values.server.replicas }}
+  selector:
+    matchLabels:
+      {{- include "mem0.server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mem0.server.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "mem0.serviceAccountName" . }}
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox
+          command: ['sh', '-c', 'until nc -z {{ include "mem0.postgres.fullname" . }} 5432; do echo waiting for postgres; sleep 2; done']
+        - name: migrate
+          image: {{ include "mem0.server.image" . }}
+          command: ['sh', '-c', 'cd /app && alembic upgrade head']
+          env:
+            - name: POSTGRES_HOST
+              value: {{ include "mem0.postgres.fullname" . }}
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mem0.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: APP_DB_NAME
+              value: {{ .Values.postgres.appDatabase }}
+            - name: HOME
+              value: /tmp
+      containers:
+        - name: mem0
+          image: {{ include "mem0.server.image" . }}
+          {{- if not .Values.server.build.enabled }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          {{- end }}
+          env:
+            - name: POSTGRES_HOST
+              value: {{ include "mem0.postgres.fullname" . }}
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mem0.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: HISTORY_DB_PATH
+              value: /tmp/mem0-history.db
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mem0.secretName" . }}
+                  key: OPENAI_API_KEY
+            - name: OPENAI_BASE_URL
+              value: {{ .Values.server.llm.openaiBaseUrl | quote }}
+            - name: MEM0_DEFAULT_LLM_MODEL
+              value: {{ .Values.server.llm.model | quote }}
+            - name: DASHBOARD_URL
+              value: {{ .Values.server.dashboardUrl | quote }}
+            - name: HOME
+              value: /tmp
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mem0.secretName" . }}
+                  key: JWT_SECRET
+            - name: AUTH_DISABLED
+              value: {{ .Values.server.auth.disabled | quote }}
+            - name: MEM0_TELEMETRY
+              value: {{ .Values.server.telemetry | quote }}
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /auth/setup-status
+              port: 8000
+            initialDelaySeconds: {{ .Values.server.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.server.readinessProbe.periodSeconds }}
+          {{- with .Values.server.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

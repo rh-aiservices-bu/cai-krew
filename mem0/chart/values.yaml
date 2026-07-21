@@ -1,0 +1,106 @@
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  name: ""
+
+secret:
+  create: true
+  existingSecret: ""
+  postgresPassword: ""
+  openaiApiKey: ""
+  embedderApiKey: ""
+  jwtSecret: ""
+
+# -- PostgreSQL + pgvector
+postgres:
+  enabled: true
+  image:
+    repository: pgvector/pgvector
+    tag: pg16
+  database: mem0
+  appDatabase: mem0_app
+  user: mem0
+  storage:
+    size: 5Gi
+    storageClassName: ""
+  resources: {}
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+
+# -- Mem0 API server
+server:
+  replicas: 1
+
+  build:
+    enabled: true
+    gitUri: ""
+    gitRef: main
+    imageTag: latest
+
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  llm:
+    model: "Qwen3.6-35B-A3B"
+    openaiBaseUrl: ""
+
+  dashboardUrl: ""
+
+  auth:
+    disabled: true
+
+  telemetry: false
+
+  route:
+    enabled: true
+    timeout: 120s
+    host: ""
+    tls:
+      termination: edge
+      insecureEdgeTerminationPolicy: Redirect
+
+  readinessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+
+  resources: {}
+
+# -- Mem0 Dashboard (Next.js)
+dashboard:
+  enabled: true
+  replicas: 1
+
+  build:
+    enabled: true
+    gitUri: ""
+    gitRef: main
+    imageTag: latest
+    contextDir: server/dashboard
+
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  serverUrl: ""
+  instanceName: Mem0
+
+  securityContext:
+    runAsUser: 1001
+
+  route:
+    enabled: true
+    host: ""
+    tls:
+      termination: edge
+      insecureEdgeTerminationPolicy: Redirect
+
+  readinessProbe:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+
+  resources: {}

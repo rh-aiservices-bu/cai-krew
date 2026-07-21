@@ -1,0 +1,36 @@
+Mem0 has been deployed to namespace {{ .Release.Namespace }}.
+
+{{- if .Values.server.build.enabled }}
+
+1. Start the server build (first time only):
+   oc start-build {{ include "mem0.server.fullname" . }} -n {{ .Release.Namespace }} --follow
+{{- end }}
+
+{{- if and .Values.dashboard.enabled .Values.dashboard.build.enabled }}
+
+2. Start the dashboard build (first time only):
+   oc start-build {{ include "mem0.dashboard.fullname" . }} -n {{ .Release.Namespace }} --follow
+{{- end }}
+
+3. Get the server route:
+   ROUTE=$(oc get route {{ include "mem0.server.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.host}')
+   curl https://$ROUTE/auth/setup-status
+
+4. Configure Mem0 (run once after first build):
+   curl -X POST https://$ROUTE/configure -H "Content-Type: application/json" -d '{
+     "vector_store": {"provider": "pgvector", "config": {
+       "host": "{{ include "mem0.postgres.fullname" . }}", "port": 5432,
+       "dbname": "{{ .Values.postgres.database }}", "user": "{{ .Values.postgres.user }}",
+       "password": "<POSTGRES_PASSWORD>",
+       "collection_name": "memories", "embedding_model_dims": 768}},
+     "llm": {"provider": "openai", "config": {
+       "model": "{{ .Values.server.llm.model }}",
+       "api_key": "<OPENAI_API_KEY>",
+       "openai_base_url": "{{ .Values.server.llm.openaiBaseUrl }}"}},
+     "embedder": {"provider": "openai", "config": {
+       "model": "/mnt/models",
+       "api_key": "<EMBEDDER_API_KEY>",
+       "openai_base_url": "<EMBEDDER_BASE_URL>"}}}'
+
+5. Prerequisites (if not already done):
+   oc adm policy add-scc-to-user anyuid -z {{ include "mem0.serviceAccountName" . }} -n {{ .Release.Namespace }}

@@ -1,0 +1,39 @@
+{{- if .Values.server.build.enabled }}
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: {{ include "mem0.server.fullname" . }}
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  source:
+    type: Git
+    git:
+      uri: {{ .Values.server.build.gitUri }}
+      ref: {{ .Values.server.build.gitRef }}
+    dockerfile: |
+      FROM python:3.12
+      WORKDIR /app
+      RUN curl -sSL https://install.python-poetry.org | python3 -
+      ENV PATH="/root/.local/bin:$PATH"
+      COPY server/requirements.txt .
+      RUN pip install -r requirements.txt
+      WORKDIR /app/packages
+      COPY pyproject.toml .
+      COPY poetry.lock .
+      COPY README.md .
+      COPY mem0 ./mem0
+      RUN pip install -e .[graph]
+      WORKDIR /app
+      COPY server .
+      RUN pip install --no-cache-dir spacy && \
+          python -m spacy download en_core_web_sm
+      CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  strategy:
+    type: Docker
+  output:
+    to:
+      kind: ImageStreamTag
+      name: {{ include "mem0.server.fullname" . }}:{{ .Values.server.build.imageTag }}
+{{- end }}
