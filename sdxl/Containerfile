@@ -1,0 +1,13 @@
+# Modelcar image for SDXL Base 1.0
+# Build requirement: sd_xl_base_1.0.safetensors must be present in the build context.
+# Download it first with: python3 download_host.py
+FROM registry.access.redhat.com/ubi9/ubi-minimal
+
+LABEL name="SDXL Base 1.0 modelcar" \
+      version="1.0"
+
+WORKDIR /models
+
+COPY sd_xl_base_1.0.safetensors .
+
+USER 1001
