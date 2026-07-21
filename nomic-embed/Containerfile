@@ -1,0 +1,13 @@
+# Modelcar image for nomic-embed-text-v1.5
+# Build requirement: model/ directory must be present in the build context.
+# Download it first: python3 download_host.py
+FROM registry.access.redhat.com/ubi9/ubi-minimal
+
+LABEL name="nomic-embed-text-v1.5 modelcar" \
+      version="1.0"
+
+WORKDIR /models
+
+COPY model/ .
+
+USER 1001

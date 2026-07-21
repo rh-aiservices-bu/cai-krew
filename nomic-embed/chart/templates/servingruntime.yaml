@@ -1,0 +1,35 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: tei-1.6
+  namespace: {{ .Release.Namespace }}
+  labels:
+    opendatahub.io/dashboard: "true"
+  annotations:
+    opendatahub.io/apiProtocol: REST
+    opendatahub.io/template-display-name: TEI 1.6
+    opendatahub.io/template-name: tei-1.6
+    openshift.io/display-name: tei-1.6
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8080"
+    {{- if .Values.gpu }}
+    opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+    {{- end }}
+spec:
+  multiModel: false
+  supportedModelFormats:
+    - name: sBERT
+      autoSelect: true
+  containers:
+    - name: kserve-container
+      image: {{ if .Values.gpu }}ghcr.io/huggingface/text-embeddings-inference:86-1.6{{ else }}ghcr.io/huggingface/text-embeddings-inference:cpu-1.6{{ end }}
+      args:
+        - --model-id=/mnt/models
+        - --port=8080
+        - --max-batch-tokens=2048
+        - --max-client-batch-size=2048
+        - --auto-truncate
+      ports:
+        - name: http1
+          containerPort: 8080
+          protocol: TCP
