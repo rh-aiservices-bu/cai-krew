@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mem0.server.fullname" . }}
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  selector:
+    {{- include "mem0.server.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 8000
+      targetPort: 8000

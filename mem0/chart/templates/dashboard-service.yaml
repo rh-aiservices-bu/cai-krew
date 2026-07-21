@@ -1,0 +1,15 @@
+{{- if .Values.dashboard.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mem0.dashboard.fullname" . }}
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  selector:
+    {{- include "mem0.dashboard.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 3000
+      targetPort: 3000
+{{- end }}

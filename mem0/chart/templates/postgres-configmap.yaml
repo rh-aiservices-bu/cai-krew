@@ -1,0 +1,11 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mem0.postgres.fullname" . }}-init
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+data:
+  init.sql: |
+    CREATE DATABASE {{ .Values.postgres.appDatabase }};
+{{- end }}

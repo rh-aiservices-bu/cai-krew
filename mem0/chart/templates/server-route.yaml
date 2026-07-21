@@ -1,0 +1,23 @@
+{{- if .Values.server.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "mem0.server.fullname" . }}
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  annotations:
+    haproxy.router.openshift.io/timeout: {{ .Values.server.route.timeout }}
+spec:
+  {{- if .Values.server.route.host }}
+  host: {{ .Values.server.route.host }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "mem0.server.fullname" . }}
+  port:
+    targetPort: 8000
+  tls:
+    termination: {{ .Values.server.route.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.server.route.tls.insecureEdgeTerminationPolicy }}
+{{- end }}

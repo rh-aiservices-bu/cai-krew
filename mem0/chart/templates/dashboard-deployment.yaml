@@ -1,0 +1,52 @@
+{{- if .Values.dashboard.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mem0.dashboard.fullname" . }}
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+  {{- if .Values.dashboard.build.enabled }}
+  annotations:
+    image.openshift.io/triggers: |
+      [{"from":{"kind":"ImageStreamTag","name":"{{ include "mem0.dashboard.fullname" . }}:{{ .Values.dashboard.build.imageTag }}"},"fieldPath":"spec.template.spec.containers[?(@.name==\"dashboard\")].image"}]
+  {{- end }}
+spec:
+  replicas: {{ .Values.dashboard.replicas }}
+  selector:
+    matchLabels:
+      {{- include "mem0.dashboard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mem0.dashboard.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "mem0.serviceAccountName" . }}
+      securityContext:
+        runAsUser: {{ .Values.dashboard.securityContext.runAsUser }}
+      containers:
+        - name: dashboard
+          image: {{ include "mem0.dashboard.image" . }}
+          {{- if not .Values.dashboard.build.enabled }}
+          imagePullPolicy: {{ .Values.dashboard.image.pullPolicy }}
+          {{- end }}
+          env:
+            - name: NEXT_PUBLIC_API_URL
+              value: {{ .Values.dashboard.serverUrl | quote }}
+            - name: API_INTERNAL_URL
+              value: "http://{{ include "mem0.server.fullname" . }}:8000"
+            - name: NEXT_PUBLIC_INSTANCE_NAME
+              value: {{ .Values.dashboard.instanceName | quote }}
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: {{ .Values.dashboard.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.dashboard.readinessProbe.periodSeconds }}
+          {{- with .Values.dashboard.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mem0
+description: Mem0 self-hosted deployment for OpenShift (PostgreSQL + pgvector, API server, dashboard).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

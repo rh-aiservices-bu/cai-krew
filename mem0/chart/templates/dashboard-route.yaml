@@ -1,0 +1,21 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "mem0.dashboard.fullname" . }}
+  labels:
+    {{- include "mem0.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  {{- if .Values.dashboard.route.host }}
+  host: {{ .Values.dashboard.route.host }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "mem0.dashboard.fullname" . }}
+  port:
+    targetPort: 3000
+  tls:
+    termination: {{ .Values.dashboard.route.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.dashboard.route.tls.insecureEdgeTerminationPolicy }}
+{{- end }}
