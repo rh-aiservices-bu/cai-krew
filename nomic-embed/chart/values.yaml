@@ -1,0 +1,2 @@
+modelcarImage: oci://quay.io/rlundber/nomic-embed:1.0
+gpu: true

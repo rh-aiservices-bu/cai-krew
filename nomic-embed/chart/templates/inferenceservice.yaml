@@ -1,0 +1,37 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: nomic-embed-text-v1-5
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    openshift.io/display-name: Nomic-embed-text-v1.5
+    serving.kserve.io/deploymentMode: Standard
+spec:
+  predictor:
+    automountServiceAccountToken: false
+    minReplicas: 1
+    maxReplicas: 1
+    {{- if .Values.gpu }}
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    {{- end }}
+    model:
+      modelFormat:
+        name: sBERT
+      runtime: tei-1.6
+      storageUri: {{ .Values.modelcarImage }}
+      resources:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+          {{- if .Values.gpu }}
+          nvidia.com/gpu: "1"
+          {{- end }}
+        limits:
+          cpu: "2"
+          memory: 6Gi
+          {{- if .Values.gpu }}
+          nvidia.com/gpu: "1"
+          {{- end }}

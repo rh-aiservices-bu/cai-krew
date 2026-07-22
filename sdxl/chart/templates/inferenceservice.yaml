@@ -1,0 +1,42 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: sdxl
+  namespace: {{ .Release.Namespace }}
+  labels:
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: SDXL-1.0
+    serving.kserve.io/deploymentMode: Standard
+    modelFormat: sdxl
+spec:
+  predictor:
+    automountServiceAccountToken: false
+    minReplicas: 1
+    maxReplicas: 1
+    model:
+      name: ""
+      runtime: sdxl
+      modelFormat:
+        name: sdxl
+      storageUri: {{ .Values.modelcarImage }}
+      args:
+        - --single-file-model=/mnt/models/sd_xl_base_1.0.safetensors
+        - --use-refiner=False
+        - --device=cuda
+      env:
+        - name: ENABLE_WATERMARK
+          value: "false"
+      resources:
+        requests:
+          cpu: "3"
+          memory: 11Gi
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "3"
+          memory: 11Gi
+          nvidia.com/gpu: "1"
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
