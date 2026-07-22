@@ -3,6 +3,10 @@
 # Adapts the cai-krew Hermes container for OpenShell sandbox use.
 # Includes the RHRolun fork with Slack plugin, otel, and MLflow tracing.
 #
+# Hermes is installed system-wide (no venv) so the binary lands at
+# /usr/local/bin/hermes, which is under /usr - always readable and
+# executable in the default OpenShell Landlock policy.
+#
 # Build:
 #   podman build --platform linux/amd64 -t hermes-openshell:latest -f Containerfile.openshell .
 #
@@ -23,17 +27,13 @@ RUN microdnf install -y --nodocs python3.12 python3.12-pip git gcc && \
     microdnf clean all && \
     rm -rf /var/cache/yum
 
-# Create venv (matches cai-krew layout)
-RUN python3 -m venv /opt/hermes/venv
-ENV PATH="/opt/hermes/venv/bin:${PATH}"
-
-# Clone RHRolun fork and install with Slack plugin
+# Clone RHRolun fork and install with Slack plugin (system-wide, no venv)
 RUN git clone --depth 1 https://github.com/RHRolun/hermes-agent.git /tmp/hermes-agent && \
-    pip install --no-cache-dir "/tmp/hermes-agent[slack]" && \
+    pip3.12 install --no-cache-dir "/tmp/hermes-agent[slack]" && \
     rm -rf /tmp/hermes-agent
 
 # Extra deps from cai-krew build (otel, whisper, yaml)
-RUN pip install --no-cache-dir \
+RUN pip3.12 install --no-cache-dir \
     pyyaml \
     faster-whisper \
     opentelemetry-api \
@@ -41,7 +41,7 @@ RUN pip install --no-cache-dir \
     opentelemetry-exporter-otlp-proto-http
 
 # MLflow tracing (Python SDK + kubernetes-namespaced auth for RHOAI)
-RUN pip install --no-cache-dir 'mlflow[kubernetes]>=3.12'
+RUN pip3.12 install --no-cache-dir 'mlflow[kubernetes]>=3.12'
 
 # Hermes home directory structure
 RUN mkdir -p /sandbox/.hermes/{skills,sessions,logs,memories,cache,cache/models} && \
@@ -60,4 +60,4 @@ WORKDIR /workspace
 
 ENV AGENT_NAME=hermes \
     HERMES_HOME=/sandbox/.hermes \
-    PATH="/opt/hermes/venv/bin:/sandbox/.local/bin:${PATH}"
+    PATH="/usr/local/bin:/sandbox/.local/bin:${PATH}"
