@@ -1,0 +1,63 @@
+# Hermes Agent for OpenShell sandbox
+#
+# Adapts the cai-krew Hermes container for OpenShell sandbox use.
+# Includes the RHRolun fork with Slack plugin, otel, and MLflow tracing.
+#
+# Build:
+#   podman build --platform linux/amd64 -t hermes-openshell:latest -f Containerfile.openshell .
+#
+# Use in OpenShell:
+#   openshell sandbox create --name hermes --from hermes-openshell:latest
+
+FROM quay.io/hmoghani/openshell-base:latest
+
+LABEL name="hermes" \
+      summary="Hermes agent (RHRolun fork + Slack) for OpenShell sandbox"
+
+USER 0
+
+# Python 3.12 + build deps (gcc for native extensions like faster-whisper)
+RUN microdnf install -y --nodocs python3.12 python3.12-pip git gcc && \
+    ln -sf /usr/bin/python3.12 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.12 /usr/bin/python && \
+    microdnf clean all && \
+    rm -rf /var/cache/yum
+
+# Create venv (matches cai-krew layout)
+RUN python3 -m venv /opt/hermes/venv
+ENV PATH="/opt/hermes/venv/bin:${PATH}"
+
+# Clone RHRolun fork and install with Slack plugin
+RUN git clone --depth 1 https://github.com/RHRolun/hermes-agent.git /tmp/hermes-agent && \
+    pip install --no-cache-dir "/tmp/hermes-agent[slack]" && \
+    rm -rf /tmp/hermes-agent
+
+# Extra deps from cai-krew build (otel, whisper, yaml)
+RUN pip install --no-cache-dir \
+    pyyaml \
+    faster-whisper \
+    opentelemetry-api \
+    opentelemetry-sdk \
+    opentelemetry-exporter-otlp-proto-http
+
+# MLflow tracing (Python SDK + kubernetes-namespaced auth for RHOAI)
+RUN pip install --no-cache-dir 'mlflow[kubernetes]>=3.12'
+
+# Hermes home directory structure
+RUN mkdir -p /sandbox/.hermes/{skills,sessions,logs,memories,cache,cache/models} && \
+    chown -R 1001:0 /sandbox/.hermes && \
+    chmod -R 775 /sandbox/.hermes
+
+# Include entrypoint.sh as a utility script (not as ENTRYPOINT - sandbox supervisor manages lifecycle)
+COPY entrypoint.sh /opt/hermes/entrypoint.sh
+RUN chmod +x /opt/hermes/entrypoint.sh
+
+# Verify install
+RUN hermes --version
+
+USER 1001
+WORKDIR /workspace
+
+ENV AGENT_NAME=hermes \
+    HERMES_HOME=/sandbox/.hermes \
+    PATH="/opt/hermes/venv/bin:/sandbox/.local/bin:${PATH}"
