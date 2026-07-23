@@ -1,0 +1,12 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: openshell-gw
+  annotations:
+    haproxy.router.openshift.io/enable-h2c: "true"
+spec:
+  to:
+    kind: Service
+    name: openshell
+  port:
+    targetPort: grpc

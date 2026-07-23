@@ -1,0 +1,179 @@
+---
+# Deploys the OpenShell gateway on the cluster.
+# Equivalent to: bash install-gateway.sh
+#
+# Apply with:
+#   oc apply -f sa-installer.yaml -n <your-namespace>
+#   oc apply -f configmap-scripts.yaml -n <your-namespace>
+#   oc apply -f job-install-gateway.yaml -n <your-namespace>
+#   oc logs -f job/openshell-install-gateway -n <your-namespace>
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openshell-install-gateway
+spec:
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: openshell-installer
+      restartPolicy: Never
+
+      initContainers:
+        # Download helm — not included in origin-cli image
+        - name: get-helm
+          image: registry.access.redhat.com/ubi9/ubi
+          command:
+            - sh
+            - -c
+            - |
+              HELM_VERSION="${HELM_VERSION:-v3.17.3}"
+              curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" -o /tmp/helm.tar.gz
+              tar -xzf /tmp/helm.tar.gz -C /tmp
+              mv /tmp/linux-amd64/helm /tools/helm
+              chmod +x /tools/helm
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+
+        # Generate Ed25519 JWT signing keypair — origin-cli lacks openssl, ubi9 has it
+        - name: gen-jwt-keys
+          image: registry.access.redhat.com/ubi9/ubi
+          command:
+            - sh
+            - -c
+            - |
+              dnf install -y openssl --quiet --nodocs --setopt=install_weak_deps=0
+              openssl genpkey -algorithm Ed25519 -out /jwt/signing.pem
+              openssl pkey -in /jwt/signing.pem -pubout -out /jwt/public.pem
+              kid=$(openssl pkey -in /jwt/signing.pem -pubout -outform DER \
+                  | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+              echo "$kid" > /jwt/kid.txt
+          volumeMounts:
+            - name: jwt-keys
+              mountPath: /jwt
+
+      containers:
+        - name: installer
+          image: quay.io/openshift/origin-cli:latest
+          command:
+            - bash
+            - -c
+            - |
+              export PATH="/tools:$PATH"
+              source /scripts/functions.sh
+
+              NAMESPACE="${OPENSHELL_NAMESPACE:-openshell}"
+              OPENSHELL_VERSION="${OPENSHELL_VERSION:-}"
+              VERSION_FLAG=""
+              [ -n "$OPENSHELL_VERSION" ] && VERSION_FLAG="--version $OPENSHELL_VERSION"
+
+              echo "============================================"
+              echo " OpenShell Gateway Install (Job)"
+              echo " Namespace: $NAMESPACE"
+              echo "============================================"
+
+              install_agent_sandbox_crd
+              create_openshell_namespace "$NAMESPACE"
+              grant_privileged_scc "$NAMESPACE"
+              step "Create JWT signing secret"
+              if oc -n "$NAMESPACE" get secret openshell-jwt-keys &>/dev/null; then
+                  info "Secret 'openshell-jwt-keys' already exists, skipping"
+              else
+                  oc -n "$NAMESPACE" create secret generic openshell-jwt-keys \
+                      --from-file=signing.pem=/jwt/signing.pem \
+                      --from-file=public.pem=/jwt/public.pem \
+                      --from-file=kid=/jwt/kid.txt
+                  info "JWT signing secret created"
+              fi
+
+              # Remove stale cluster-scoped resources that may be owned by a previous release
+              step "Clean up stale ClusterRole/ClusterRoleBinding if namespace mismatch"
+              for cr in openshell-node-reader; do
+                  OWNER_NS=$(oc get clusterrole "$cr" \
+                      -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-namespace}' 2>/dev/null || true)
+                  if [ -n "$OWNER_NS" ] && [ "$OWNER_NS" != "$NAMESPACE" ]; then
+                      info "Removing stale ClusterRole/$cr (owned by release in $OWNER_NS)"
+                      oc delete clusterrole "$cr" --ignore-not-found
+                      oc delete clusterrolebinding "$cr" --ignore-not-found
+                  fi
+              done
+
+              step "Install OpenShell Helm chart"
+              helm upgrade --install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
+                  --namespace "$NAMESPACE" \
+                  $VERSION_FLAG \
+                  --set pkiInitJob.enabled=false \
+                  --set server.disableTls=true \
+                  --set server.auth.allowUnauthenticatedUsers=true \
+                  --set podSecurityContext.fsGroup=null \
+                  --set securityContext.runAsUser=null
+
+              EXISTING_NS=$(oc get clusterrolebinding openshell-node-reader \
+                  -o jsonpath='{.subjects[0].namespace}' 2>/dev/null || true)
+              if [ -n "$EXISTING_NS" ] && [ "$EXISTING_NS" != "$NAMESPACE" ]; then
+                  info "Patching ClusterRoleBinding for $NAMESPACE"
+                  oc patch clusterrolebinding openshell-node-reader --type='json' -p="[
+                    {\"op\":\"add\",\"path\":\"/subjects/-\",\"value\":{\"kind\":\"ServiceAccount\",\"name\":\"openshell\",\"namespace\":\"$NAMESPACE\"}}
+                  ]"
+              fi
+
+              wait_for_rollout statefulset openshell "$NAMESPACE" 300
+
+              step "Expose gateway via Route"
+              oc -n "$NAMESPACE" apply -f - <<'EOF'
+              apiVersion: route.openshift.io/v1
+              kind: Route
+              metadata:
+                name: openshell-gw
+                annotations:
+                  haproxy.router.openshift.io/enable-h2c: "true"
+              spec:
+                to:
+                  kind: Service
+                  name: openshell
+                port:
+                  targetPort: grpc
+              EOF
+
+              sleep 2
+              GW_ROUTE=$(oc -n "$NAMESPACE" get route openshell-gw \
+                  -o jsonpath='{.spec.host}' 2>/dev/null || echo "pending")
+
+              echo ""
+              echo "============================================"
+              echo " Gateway deployed!"
+              echo " URL: http://$GW_ROUTE"
+              echo ""
+              echo " Next: register with the CLI:"
+              echo "   openshell gateway add http://$GW_ROUTE --local --name openshift"
+              echo " Then run the setup-sandbox Job."
+              echo "============================================"
+          env:
+            - name: OPENSHELL_NAMESPACE
+              value: "cai-crew"
+            - name: OPENSHELL_VERSION
+              value: ""
+            - name: HELM_CACHE_HOME
+              value: /tmp/helm/cache
+            - name: HELM_CONFIG_HOME
+              value: /tmp/helm/config
+            - name: HELM_DATA_HOME
+              value: /tmp/helm/data
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+            - name: scripts
+              mountPath: /scripts
+            - name: jwt-keys
+              mountPath: /jwt
+
+      volumes:
+        - name: tools
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: openshell-scripts
+            defaultMode: 0755
+        - name: jwt-keys
+          emptyDir: {}

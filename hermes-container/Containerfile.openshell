@@ -43,19 +43,27 @@ RUN pip3.12 install --no-cache-dir \
 # MLflow tracing (Python SDK + kubernetes-namespaced auth for RHOAI)
 RUN pip3.12 install --no-cache-dir 'mlflow[kubernetes]>=3.12'
 
-# Hermes home directory structure
-RUN mkdir -p /sandbox/.hermes/{skills,sessions,logs,memories,cache,cache/models} && \
-    chown -R 1001:0 /sandbox/.hermes && \
-    chmod -R 775 /sandbox/.hermes
-
-# Include entrypoint.sh as a utility script (not as ENTRYPOINT - sandbox supervisor manages lifecycle)
-COPY entrypoint.sh /opt/hermes/entrypoint.sh
-RUN chmod +x /opt/hermes/entrypoint.sh
+# Start script: waits for the init script written by the setup Job, then starts Hermes
+# Used as the sandbox create command: -- /opt/hermes/start.sh
+RUN printf '#!/bin/sh\n\
+echo "[start.sh] Waiting for sandbox init script..."\n\
+for i in $(seq 1 60); do\n\
+    [ -f /sandbox/.sandbox-init.sh ] && break\n\
+    [ "$i" -eq 60 ] && echo "[start.sh] Timed out waiting for init script" && exit 1\n\
+    sleep 2\n\
+done\n\
+echo "[start.sh] Sourcing /sandbox/.sandbox-init.sh"\n\
+. /sandbox/.sandbox-init.sh\n\
+echo "[start.sh] Starting Hermes"\n\
+exec hermes\n\
+' > /opt/hermes/start.sh && chmod +x /opt/hermes/start.sh
 
 # Verify install
 RUN hermes --version
 
-USER 1001
+# Sandbox runs as root with HOME=/root; /sandbox/ is a PVC mount (wiped at start)
+# HERMES_HOME points to the PVC so config survives agent restarts
+USER 0
 WORKDIR /workspace
 
 ENV AGENT_NAME=hermes \

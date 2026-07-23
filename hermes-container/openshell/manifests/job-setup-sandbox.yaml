@@ -1,0 +1,210 @@
+---
+# Creates and configures the Hermes agent sandbox on an existing OpenShell gateway.
+# Equivalent to: bash setup-sandbox.sh
+#
+# Prerequisites:
+#   oc apply -f sa-installer.yaml -n <your-namespace>
+#   oc apply -f configmap-scripts.yaml -n <your-namespace>
+#   oc apply -f secret-sandbox-credentials.yaml -n <your-namespace>   # fill in values first
+#   oc apply -f job-setup-sandbox.yaml -n <your-namespace>
+#   oc logs -f job/hermes-setup-sandbox -n <your-namespace>
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hermes-setup-sandbox
+spec:
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: openshell-installer
+      restartPolicy: Never
+
+      initContainers:
+        # Download the openshell CLI (musl tarball = statically linked, no deps)
+        - name: get-openshell
+          image: registry.access.redhat.com/ubi9/ubi
+          command:
+            - sh
+            - -c
+            - |
+              OPENSHELL_VERSION="${OPENSHELL_VERSION:-v0.0.88}"
+              curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/${OPENSHELL_VERSION}/openshell-x86_64-unknown-linux-musl.tar.gz" \
+                  -o /tmp/openshell.tar.gz
+              tar -xzf /tmp/openshell.tar.gz -C /tmp
+              mv /tmp/openshell /tools/openshell
+              chmod +x /tools/openshell
+          env:
+            - name: OPENSHELL_VERSION
+              value: "v0.0.88"
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+
+      containers:
+        - name: setup
+          image: quay.io/openshift/origin-cli:latest
+          command:
+            - bash
+            - -c
+            - |
+              export PATH="/tools:$PATH"
+              export HOME=/tmp
+              source /scripts/functions.sh
+
+              # Register the in-cluster gateway (fresh container has no config)
+              GATEWAY_URL="${GATEWAY_URL:-http://openshell.cai-crew.svc.cluster.local:8080}"
+              step "Register gateway"
+              openshell gateway add "$GATEWAY_URL" --local --name openshift
+              openshell gateway select openshift
+
+              SANDBOX_NAME="${SANDBOX_NAME:-hermes}"
+              SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/rlundber/hermes-openshell:0.1}"
+              PLATFORM="${PLATFORM:-slack}"
+              MEM0_AGENT_ID="${MEM0_AGENT_ID:-$SANDBOX_NAME}"
+              MEM0_CUSTOM_INSTRUCTIONS="Always refer to the user by their actual name in stored memories. The user's name can be derived from the user_id field. When a new fact relates to the same subject as an existing memory, prefer UPDATE over ADD and merge the information into a single consolidated memory. Only use ADD when the fact is genuinely new with no overlap."
+
+              echo "============================================"
+              echo " Hermes Sandbox Setup (Job)"
+              echo " Sandbox : $SANDBOX_NAME"
+              echo " Platform: $PLATFORM"
+              echo " Image   : $SANDBOX_IMAGE"
+              echo " Model   : $OPENAI_MODEL"
+              echo "============================================"
+
+              # Register LLM provider
+              step "Register LLM provider"
+              openshell provider delete hermes-llm 2>/dev/null || true
+              openshell provider create \
+                  --name hermes-llm \
+                  --type openai \
+                  --credential "OPENAI_API_KEY=${OPENAI_API_KEY}" \
+                  --config "base_url=${OPENAI_BASE_URL}"
+
+              # Create sandbox
+              step "Create sandbox: $SANDBOX_NAME"
+              openshell sandbox delete "$SANDBOX_NAME" 2>/dev/null || true
+              sleep 3
+              openshell sandbox create \
+                  --name "$SANDBOX_NAME" \
+                  --from "$SANDBOX_IMAGE" \
+                  -- /opt/hermes/start.sh 2>&1 || true
+
+              # Wait for Ready
+              step "Wait for sandbox"
+              for i in $(seq 1 30); do
+                  STATUS=$(openshell sandbox list 2>/dev/null | grep "$SANDBOX_NAME" \
+                      | sed 's/\x1b\[[0-9;]*m//g' | awk '{print $NF}')
+                  [ "$STATUS" = "Ready" ] && info "Sandbox is Ready" && sleep 10 && break
+                  [ "$i" -eq 30 ] && error "Sandbox not Ready after 150s" && exit 1
+                  sleep 5
+              done
+
+              # Verify ConfigMap files are mounted
+              ls /scripts/hermes-config.yaml.template || { error "hermes-config.yaml.template missing — reapply configmap-scripts.yaml"; exit 1; }
+              ls /scripts/SOUL.md || { error "SOUL.md missing — reapply configmap-scripts.yaml"; exit 1; }
+
+              # Write Hermes config (base64 via exec — sandbox upload doesn't work in-cluster)
+              step "Write Hermes config"
+              sed \
+                  -e "s|\${OPENAI_BASE_URL}|${OPENAI_BASE_URL}|g" \
+                  -e "s|\${OPENAI_API_KEY}|${OPENAI_API_KEY}|g" \
+                  -e "s|\${OPENAI_MODEL}|${OPENAI_MODEL}|g" \
+                  -e "s|\${SLACK_TRIAGE}|${SLACK_TRIAGE:-false}|g" \
+                  /scripts/hermes-config.yaml.template > /tmp/hermes-config.yaml
+              CONFIG_B64=$(base64 -w0 /tmp/hermes-config.yaml)
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                  "mkdir -p /sandbox/.hermes && printf '%s' '${CONFIG_B64}' | base64 -d > /sandbox/.hermes/config.yaml && echo 'config ok'"
+
+              # Write soul
+              if [ -f /scripts/SOUL.md ]; then
+                  step "Write soul"
+                  SOUL_B64=$(base64 -w0 /scripts/SOUL.md)
+                  openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                      "printf '%s' '${SOUL_B64}' | base64 -d > /sandbox/.hermes/SOUL.md && echo 'soul ok'"
+              fi
+
+              # Build and write environment init script
+              step "Write environment init script"
+              cat > /tmp/sandbox-init.sh << INITHEADER
+              #!/bin/sh
+              export OPENAI_BASE_URL="${OPENAI_BASE_URL}"
+              export OPENAI_API_KEY="${OPENAI_API_KEY}"
+              export OPENAI_MODEL="${OPENAI_MODEL}"
+              export HERMES_HOME="/sandbox/.hermes"
+              export MEM0_URL="${MEM0_URL}"
+              export MEM0_AGENT_ID="${MEM0_AGENT_ID}"
+              export MEM0_CUSTOM_INSTRUCTIONS="${MEM0_CUSTOM_INSTRUCTIONS}"
+              INITHEADER
+
+              if [ "$PLATFORM" = "slack" ]; then
+              cat >> /tmp/sandbox-init.sh << SLACKENV
+              export SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
+              export SLACK_APP_TOKEN="${SLACK_APP_TOKEN:-}"
+              export SLACK_SOCKET_MODE="true"
+              export SLACK_ALLOWED_USERS="${SLACK_ALLOWED_USERS:-}"
+              export SLACK_HOME_CHANNEL="${SLACK_HOME_CHANNEL:-}"
+              export SLACK_TRIAGE="${SLACK_TRIAGE:-false}"
+              SLACKENV
+              elif [ "$PLATFORM" = "mattermost" ]; then
+              cat >> /tmp/sandbox-init.sh << MMENV
+              export MATTERMOST_URL="${MATTERMOST_URL:-}"
+              export MATTERMOST_TOKEN="${MATTERMOST_TOKEN:-}"
+              export MATTERMOST_TEAM="${MATTERMOST_TEAM:-}"
+              MMENV
+              fi
+
+              if [ -n "${MLFLOW_TRACKING_URI:-}" ]; then
+              OCP_TOKEN=$(oc whoami -t 2>/dev/null || true)
+              cat >> /tmp/sandbox-init.sh << MLFLOWENV
+              export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI}"
+              export MLFLOW_TRACKING_TOKEN="${OCP_TOKEN}"
+              export MLFLOW_TRACKING_INSECURE_TLS="true"
+              export MLFLOW_WORKSPACE="${MLFLOW_WORKSPACE:-cai-crew}"
+              export MLFLOW_EXPERIMENT_NAME="hermes-sandbox"
+              MLFLOWENV
+              fi
+
+              echo 'export SANDBOX_ENV_LOADED=1' >> /tmp/sandbox-init.sh
+              INIT_B64=$(base64 -w0 /tmp/sandbox-init.sh)
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                  "printf '%s' '${INIT_B64}' | base64 -d > /sandbox/.sandbox-init.sh && chmod +x /sandbox/.sandbox-init.sh && echo 'init ok'"
+
+              # Auto-source on login
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c '
+                  grep -q "sandbox-init.sh" /sandbox/.profile 2>/dev/null || \
+                  printf "\nif [ -f /sandbox/.sandbox-init.sh ] && [ -z \"$SANDBOX_ENV_LOADED\" ]; then\n  . /sandbox/.sandbox-init.sh\nfi\n" >> /sandbox/.profile
+                  echo "profile ok"
+              '
+
+              echo ""
+              echo "============================================"
+              echo " Sandbox '$SANDBOX_NAME' ready!"
+              echo " Connect: openshell sandbox connect $SANDBOX_NAME"
+              echo "============================================"
+
+          envFrom:
+            - secretRef:
+                name: hermes-sandbox-credentials
+          env:
+            - name: SANDBOX_NAME
+              value: "hermes"
+            - name: PLATFORM
+              value: "mattermost"       # or mattermost
+            - name: SANDBOX_IMAGE
+              value: "quay.io/rlundber/hermes-openshell:0.2"
+            - name: GATEWAY_URL
+              value: "http://openshell.cai-crew.svc.cluster.local:8080"
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+            - name: scripts
+              mountPath: /scripts
+
+      volumes:
+        - name: tools
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: openshell-scripts
+            defaultMode: 0755
