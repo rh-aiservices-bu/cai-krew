@@ -209,6 +209,11 @@ data:
 
     file_read_max_chars: 100000
 
+    web:
+      backend: ddgs
+      search_backend: ''
+      extract_backend: ''
+
     # Slack gateway + triage
     slack:
       require_mention: true
@@ -401,6 +406,27 @@ data:
         binaries:
           - { path: /usr/bin/curl }
           - { path: /usr/bin/python3 }
+          - { path: "/usr/local/bin/hermes" }
+
+      duckduckgo:
+        name: "DuckDuckGo Search"
+        endpoints:
+          - host: duckduckgo.com
+            port: 443
+            protocol: rest
+            enforcement: enforce
+            access: read-only
+          - host: links.duckduckgo.com
+            port: 443
+            enforcement: enforce
+            access: read-only
+          - host: html.duckduckgo.com
+            port: 443
+            enforcement: enforce
+            access: read-only
+        binaries:
+          - { path: /usr/bin/python3 }
+          - { path: /usr/bin/python3.12 }
           - { path: "/usr/local/bin/hermes" }
 
       openshift_oauth:
