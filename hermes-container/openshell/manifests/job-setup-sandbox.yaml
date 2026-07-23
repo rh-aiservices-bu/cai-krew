@@ -152,6 +152,8 @@ spec:
               export MATTERMOST_TOKEN="${MATTERMOST_TOKEN:-}"
               export MATTERMOST_TEAM="${MATTERMOST_TEAM:-}"
               export MATTERMOST_ALLOWED_USERS="${MATTERMOST_ALLOWED_USERS:-}"
+              export MATTERMOST_REPLY_MODE="${MATTERMOST_REPLY_MODE:-}"
+              export MATTERMOST_HOME_CHANNEL="${MATTERMOST_HOME_CHANNEL:-}"
               export GATEWAY_ALLOW_ALL_USERS="${GATEWAY_ALLOW_ALL_USERS:-false}"
               MMENV
               fi
@@ -222,7 +224,7 @@ spec:
             - name: PLATFORM
               value: "mattermost"       # or mattermost
             - name: SANDBOX_IMAGE
-              value: "quay.io/rlundber/hermes-openshell:0.6"
+              value: "quay.io/rlundber/hermes-openshell:0.8"
             - name: GATEWAY_URL
               value: "http://openshell.cai-crew.svc.cluster.local:8080"
           volumeMounts:

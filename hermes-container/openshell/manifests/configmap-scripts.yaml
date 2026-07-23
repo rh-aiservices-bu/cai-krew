@@ -424,6 +424,22 @@ data:
             port: 443
             enforcement: enforce
             access: read-only
+          - host: search.brave.com
+            port: 443
+            enforcement: enforce
+            access: read-only
+          - host: "*.brave.com"
+            port: 443
+            enforcement: enforce
+            access: read-only
+          - host: www.startpage.com
+            port: 443
+            enforcement: enforce
+            access: read-only
+          - host: www.bing.com
+            port: 443
+            enforcement: enforce
+            access: read-only
         binaries:
           - { path: /usr/bin/python3 }
           - { path: /usr/bin/python3.12 }
