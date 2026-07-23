@@ -61,8 +61,6 @@ spec:
               SANDBOX_NAME="${SANDBOX_NAME:-hermes}"
               SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/rlundber/hermes-openshell:0.1}"
               PLATFORM="${PLATFORM:-slack}"
-              MEM0_AGENT_ID="${MEM0_AGENT_ID:-$SANDBOX_NAME}"
-              MEM0_CUSTOM_INSTRUCTIONS="Always refer to the user by their actual name in stored memories. The user's name can be derived from the user_id field. When a new fact relates to the same subject as an existing memory, prefer UPDATE over ADD and merge the information into a single consolidated memory. Only use ADD when the fact is genuinely new with no overlap."
 
               echo "============================================"
               echo " Hermes Sandbox Setup (Job)"
@@ -124,53 +122,24 @@ spec:
                       "printf '%s' '${SOUL_B64}' | base64 -d > /sandbox/.hermes/SOUL.md && echo 'soul ok'"
               fi
 
-              # Build and write environment init script
+              # Build and write environment init script.
+              # All secret vars are already in the job env via envFrom/secretRef,
+              # so we dump them with printenv (prefix filter avoids system noise).
               step "Write environment init script"
-              cat > /tmp/sandbox-init.sh << INITHEADER
-              #!/bin/sh
-              export OPENAI_BASE_URL="${OPENAI_BASE_URL}"
-              export OPENAI_API_KEY="${OPENAI_API_KEY}"
-              export OPENAI_MODEL="${OPENAI_MODEL}"
-              export HERMES_HOME="/sandbox/.hermes"
-              export MEM0_URL="${MEM0_URL}"
-              export MEM0_AGENT_ID="${MEM0_AGENT_ID}"
-              export MEM0_CUSTOM_INSTRUCTIONS="${MEM0_CUSTOM_INSTRUCTIONS}"
-              export SDXL_BASE_URL="${SDXL_BASE_URL}"
-              INITHEADER
-
-              if [ "$PLATFORM" = "slack" ]; then
-              cat >> /tmp/sandbox-init.sh << SLACKENV
-              export SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
-              export SLACK_APP_TOKEN="${SLACK_APP_TOKEN:-}"
-              export SLACK_SOCKET_MODE="true"
-              export SLACK_ALLOWED_USERS="${SLACK_ALLOWED_USERS:-}"
-              export SLACK_HOME_CHANNEL="${SLACK_HOME_CHANNEL:-}"
-              export SLACK_TRIAGE="${SLACK_TRIAGE:-false}"
-              SLACKENV
-              elif [ "$PLATFORM" = "mattermost" ]; then
-              cat >> /tmp/sandbox-init.sh << MMENV
-              export MATTERMOST_URL="${MATTERMOST_URL:-}"
-              export MATTERMOST_TOKEN="${MATTERMOST_TOKEN:-}"
-              export MATTERMOST_TEAM="${MATTERMOST_TEAM:-}"
-              export MATTERMOST_ALLOWED_USERS="${MATTERMOST_ALLOWED_USERS:-}"
-              export MATTERMOST_REPLY_MODE="${MATTERMOST_REPLY_MODE:-}"
-              export MATTERMOST_HOME_CHANNEL="${MATTERMOST_HOME_CHANNEL:-}"
-              export GATEWAY_ALLOW_ALL_USERS="${GATEWAY_ALLOW_ALL_USERS:-false}"
-              MMENV
-              fi
-
-              if [ -n "${MLFLOW_TRACKING_URI:-}" ]; then
-              OCP_TOKEN=$(oc whoami -t 2>/dev/null || true)
-              cat >> /tmp/sandbox-init.sh << MLFLOWENV
-              export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI}"
-              export MLFLOW_TRACKING_TOKEN="${OCP_TOKEN}"
-              export MLFLOW_TRACKING_INSECURE_TLS="true"
-              export MLFLOW_WORKSPACE="${MLFLOW_WORKSPACE:-cai-crew}"
-              export MLFLOW_EXPERIMENT_NAME="hermes-sandbox"
-              MLFLOWENV
-              fi
-
-              echo 'export SANDBOX_ENV_LOADED=1' >> /tmp/sandbox-init.sh
+              {
+                  echo "#!/bin/sh"
+                  while IFS='=' read -r key value; do
+                      printf "export %s=%q\n" "$key" "$value"
+                  done < <(printenv | grep -E '^(OPENAI_|SLACK_|MATTERMOST_|MEM0_|SDXL_|MLFLOW_|FAL_|GATEWAY_)')
+                  # HERMES_HOME is a fixed sandbox path, not a credential
+                  echo "export HERMES_HOME='/sandbox/.hermes'"
+                  # MLflow bearer token must be fetched at job runtime via oc whoami
+                  if [ -n "${MLFLOW_TRACKING_URI:-}" ]; then
+                      OCP_TOKEN=$(oc whoami -t 2>/dev/null || true)
+                      echo "export MLFLOW_TRACKING_TOKEN='${OCP_TOKEN}'"
+                  fi
+                  echo "export SANDBOX_ENV_LOADED=1"
+              } > /tmp/sandbox-init.sh
               INIT_B64=$(base64 -w0 /tmp/sandbox-init.sh)
               openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
                   "printf '%s' '${INIT_B64}' | base64 -d > /sandbox/.sandbox-init.sh && chmod +x /sandbox/.sandbox-init.sh && echo 'init ok'"
