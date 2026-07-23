@@ -88,7 +88,7 @@ spec:
               openshell sandbox create \
                   --name "$SANDBOX_NAME" \
                   --from "$SANDBOX_IMAGE" \
-                  -- /opt/hermes/start.sh 2>&1 || true
+                  -- echo "sandbox created" 2>&1 || true
 
               # Wait for Ready
               step "Wait for sandbox"
@@ -151,6 +151,8 @@ spec:
               export MATTERMOST_URL="${MATTERMOST_URL:-}"
               export MATTERMOST_TOKEN="${MATTERMOST_TOKEN:-}"
               export MATTERMOST_TEAM="${MATTERMOST_TEAM:-}"
+              export MATTERMOST_ALLOWED_USERS="${MATTERMOST_ALLOWED_USERS:-}"
+              export GATEWAY_ALLOW_ALL_USERS="${GATEWAY_ALLOW_ALL_USERS:-false}"
               MMENV
               fi
 
@@ -177,9 +179,37 @@ spec:
                   echo "profile ok"
               '
 
+              # Verify image has hermes + start.sh
+              step "Verify image"
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                  "hermes --version && ls -la /opt/hermes/start.sh 2>&1 || echo 'WARNING: /opt/hermes/start.sh not found in image'"
+
+              # Apply network policy
+              step "Apply network policy"
+              OCP_APPS_DOMAIN=$(oc get ingresses.config cluster \
+                  -o jsonpath='{.spec.domain}' 2>/dev/null || \
+                  oc whoami --show-server \
+                  | sed 's|.*://api\.||;s|:.*||;s|^|apps.|')
+              info "OCP apps domain: $OCP_APPS_DOMAIN"
+              sed "s/__OCP_APPS_DOMAIN__/${OCP_APPS_DOMAIN}/g" \
+                  /scripts/policy-standard.yaml.template > /tmp/policy-rendered.yaml
+              openshell policy set --policy /tmp/policy-rendered.yaml --wait "$SANDBOX_NAME"
+
+              # Start Hermes as a persistent background process
+              step "Start Hermes"
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                  ". /sandbox/.sandbox-init.sh && nohup hermes gateway run > /sandbox/hermes.log 2>&1 & echo \"Hermes started (PID \$!)\""
+              sleep 5
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                  "ps aux | grep -v grep | grep hermes && echo 'Hermes is running' || echo 'WARNING: hermes process not found'"
+              info "Hermes log (first 50 lines):"
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                  "head -50 /sandbox/hermes.log 2>/dev/null || echo '(log not yet written)'"
+
               echo ""
               echo "============================================"
               echo " Sandbox '$SANDBOX_NAME' ready!"
+              echo " Logs: /sandbox/hermes.log"
               echo " Connect: openshell sandbox connect $SANDBOX_NAME"
               echo "============================================"
 
@@ -192,7 +222,7 @@ spec:
             - name: PLATFORM
               value: "mattermost"       # or mattermost
             - name: SANDBOX_IMAGE
-              value: "quay.io/rlundber/hermes-openshell:0.2"
+              value: "quay.io/rlundber/hermes-openshell:0.6"
             - name: GATEWAY_URL
               value: "http://openshell.cai-crew.svc.cluster.local:8080"
           volumeMounts:

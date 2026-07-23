@@ -33,9 +33,11 @@ RUN git clone --depth 1 https://github.com/RHRolun/hermes-agent.git /tmp/hermes-
     rm -rf /tmp/hermes-agent
 
 # Extra deps from cai-krew build (otel, whisper, yaml)
+# Pre-install elevenlabs so hermes doesn't attempt a runtime pip install (blocked by network policy)
 RUN pip3.12 install --no-cache-dir \
     pyyaml \
     faster-whisper \
+    elevenlabs \
     opentelemetry-api \
     opentelemetry-sdk \
     opentelemetry-exporter-otlp-proto-http
@@ -45,7 +47,8 @@ RUN pip3.12 install --no-cache-dir 'mlflow[kubernetes]>=3.12'
 
 # Start script: waits for the init script written by the setup Job, then starts Hermes
 # Used as the sandbox create command: -- /opt/hermes/start.sh
-RUN printf '#!/bin/sh\n\
+RUN mkdir -p /opt/hermes && \
+    printf '#!/bin/sh\n\
 echo "[start.sh] Waiting for sandbox init script..."\n\
 for i in $(seq 1 60); do\n\
     [ -f /sandbox/.sandbox-init.sh ] && break\n\
