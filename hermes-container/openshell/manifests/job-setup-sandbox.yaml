@@ -135,6 +135,7 @@ spec:
               export MEM0_URL="${MEM0_URL}"
               export MEM0_AGENT_ID="${MEM0_AGENT_ID}"
               export MEM0_CUSTOM_INSTRUCTIONS="${MEM0_CUSTOM_INSTRUCTIONS}"
+              export SDXL_BASE_URL="${SDXL_BASE_URL}"
               INITHEADER
 
               if [ "$PLATFORM" = "slack" ]; then
@@ -196,6 +197,33 @@ spec:
               sed "s/__OCP_APPS_DOMAIN__/${OCP_APPS_DOMAIN}/g" \
                   /scripts/policy-standard.yaml.template > /tmp/policy-rendered.yaml
               openshell policy set --policy /tmp/policy-rendered.yaml --wait "$SANDBOX_NAME"
+
+              # Install cai-krew plugins:
+              # Clone in the job container (full internet access), then write files
+              # into the sandbox via base64 — no GitHub access needed in OpenShell policy.
+              step "Install plugins"
+              curl -fsSL https://github.com/rh-aiservices-bu/cai-krew/archive/refs/heads/main.tar.gz \
+                  -o /tmp/cai-krew.tar.gz
+              mkdir -p /tmp/cai-krew
+              tar -xzf /tmp/cai-krew.tar.gz -C /tmp/cai-krew --strip-components=1
+              rm /tmp/cai-krew.tar.gz
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                  "mkdir -p /sandbox/.hermes/plugins"
+              for PLUGIN_DIR in /tmp/cai-krew/hermes-plugins/*/; do
+                  PLUGIN_NAME=$(basename "$PLUGIN_DIR")
+                  openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                      "mkdir -p /sandbox/.hermes/plugins/${PLUGIN_NAME}"
+                  for PLUGIN_FILE in "$PLUGIN_DIR"*; do
+                      [ -f "$PLUGIN_FILE" ] || continue
+                      FNAME=$(basename "$PLUGIN_FILE")
+                      FILE_B64=$(base64 -w0 "$PLUGIN_FILE")
+                      openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                          "printf '%s' '${FILE_B64}' | base64 -d > /sandbox/.hermes/plugins/${PLUGIN_NAME}/${FNAME}"
+                  done
+              done
+              rm -rf /tmp/cai-krew
+              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                  "echo 'plugins installed:' && ls /sandbox/.hermes/plugins/"
 
               # Start Hermes as a persistent background process
               step "Start Hermes"

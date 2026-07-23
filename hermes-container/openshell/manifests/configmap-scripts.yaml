@@ -84,9 +84,6 @@ data:
     toolsets:
       - hermes-cli
 
-    plugins:
-      enabled: []
-
     agent:
       max_turns: 150
       gateway_timeout: 1800
@@ -157,6 +154,13 @@ data:
       memory_char_limit: 2200
       user_char_limit: 1375
       provider: mem0_oss
+
+    image_gen:
+      provider: sdxl
+
+    plugins:
+      enabled:
+        - sdxl
 
     goals:
       max_turns: 20
@@ -466,6 +470,19 @@ data:
             access: full
         binaries:
           - { path: /usr/bin/curl }
+          - { path: /usr/bin/python3 }
+          - { path: /usr/bin/python3.12 }
+          - { path: "/usr/local/bin/hermes" }
+
+      sdxl_predictor:
+        name: "SDXL Image Generation"
+        endpoints:
+          - host: "sdxl-route-cai-crew.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com"
+            port: 443
+            protocol: rest
+            enforcement: enforce
+            access: full
+        binaries:
           - { path: /usr/bin/python3 }
           - { path: /usr/bin/python3.12 }
           - { path: "/usr/local/bin/hermes" }
