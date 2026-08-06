@@ -1,0 +1,12 @@
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPServerRegistration
+metadata:
+  name: gitea-mcp-server
+  namespace: mcp-test
+spec:
+  prefix: "gitea_"
+  targetRef:
+    group: "gateway.networking.k8s.io"
+    kind: "HTTPRoute"
+    name: "gitea-mcp-server-route"
+    namespace: "mcp-test"

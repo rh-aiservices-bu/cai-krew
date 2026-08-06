@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-mcp-server
+  namespace: mcp-test
+  labels:
+    app: gitea-mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea-mcp-server
+  template:
+    metadata:
+      labels:
+        app: gitea-mcp-server
+    spec:
+      containers:
+        - name: gitea-mcp-server
+          image: gitea/gitea-mcp-server:latest
+          command: ["/app/gitea-mcp"]
+          args: ["-t", "http", "--port", "8080"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: GITEA_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-mcp-server
+                  key: GITEA_HOST
+            - name: GITEA_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-mcp-server
+                  key: GITEA_ACCESS_TOKEN
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
