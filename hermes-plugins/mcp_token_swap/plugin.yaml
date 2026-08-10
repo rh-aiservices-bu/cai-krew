@@ -1,0 +1,13 @@
+name: mcp_token_swap
+version: 1.0.0
+type: memory_provider
+description: >
+  Per-user MCP token swap for Hermes.
+  Before each turn, copies the current Slack user's Keycloak token into
+  mcp-tokens/gateway.json so MCP calls are authenticated as that user.
+  Hermes picks up the change automatically via its built-in disk-watcher.
+env_vars:
+  - key: MCP_TOKEN_SWAP_SERVER_NAME
+    description: "MCP server key whose token file to swap (default: gateway)"
+    secret: false
+    required: false
