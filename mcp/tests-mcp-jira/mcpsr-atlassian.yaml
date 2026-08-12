@@ -1,0 +1,15 @@
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPServerRegistration
+metadata:
+  name: atlassian-mcp-server
+  namespace: mcp-test
+spec:
+  prefix: "jira_"
+  path: /v1/mcp
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: atlassian-mcp-server-route
+  credentialRef:
+    name: atlassian-mcp-token
+    key: token

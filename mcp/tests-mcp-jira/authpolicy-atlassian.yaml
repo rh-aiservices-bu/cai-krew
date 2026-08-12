@@ -1,0 +1,38 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: atlassian-mcp-authz-policy
+  namespace: mcp-test
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: atlassian-mcp-server-route
+  rules:
+    authentication:
+      anonymous:
+        anonymous: {}
+        when:
+        - predicate: '!request.headers.exists(h, h == ''x-mcp-toolname'')'
+      keycloak:
+        jwt:
+          issuerUrl: https://sso.apps.cluster-86gng.dyn.redhatworkshops.io/realms/mcp
+        when:
+        - predicate: request.headers.exists(h, h == 'x-mcp-toolname')
+    metadata:
+      atlasuserinfo:
+        http:
+          url: "https://sso.apps.cluster-86gng.dyn.redhatworkshops.io/realms/mcp/protocol/openid-connect/userinfo"
+          headers:
+            Authorization:
+              selector: context.request.http.headers.authorization
+        when:
+        - predicate: request.headers.exists(h, h == 'x-mcp-toolname')
+    response:
+      success:
+        headers:
+          authorization:
+            plain:
+              selector: "Bearer {auth.metadata.atlasuserinfo.atlassian_pat}"
+            when:
+            - predicate: "'atlasuserinfo' in auth.metadata && auth.metadata.atlasuserinfo.atlassian_pat != ''"

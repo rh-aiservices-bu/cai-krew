@@ -1,0 +1,11 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: atlassian-mcp-external
+  namespace: mcp-test
+spec:
+  host: mcp.atlassian.com
+  trafficPolicy:
+    tls:
+      mode: SIMPLE
+      sni: mcp.atlassian.com
