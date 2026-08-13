@@ -9,41 +9,53 @@ Unlike the Gitea MCP server (which deploys a pod), this uses Istio routing to pr
 - MCP Gateway installed and running
 - `mcp-test` namespace exists
 - Istio as the Gateway API provider (ServiceEntry + DestinationRule support)
-- An Atlassian Cloud account with an API token (PAT)
-- Keycloak `mcp` realm configured with `atlassian_pat` user attribute (for per-user PAT injection)
+- Keycloak `mcp` realm configured with the `mcp-gateway` public client
+- Python 3 on the user's laptop (for the link script)
 
 ## Auth model
 
-This setup uses per-user Atlassian PATs stored as Keycloak user attributes. When a tool call comes through:
+This setup uses per-user Atlassian OAuth tokens stored as Keycloak user attributes. When a tool call comes through:
 
 1. Authorino validates the user's Keycloak JWT
 2. Authorino fetches the user's profile from the Keycloak userinfo endpoint
-3. Authorino reads the `atlassian_pat` attribute from the user's profile
-4. Authorino injects `Bearer <atlassian_pat>` as the Authorization header sent to Atlassian
+3. Authorino reads the `atlassian_oauth_token` attribute from the user's profile
+4. Authorino injects `Bearer <atlassian_oauth_token>` as the Authorization header sent to Atlassian
 
-The broker also needs a PAT for session initialization (tool discovery at startup). This is stored in a Secret via `credentialRef`.
+The OAuth tokens are obtained via a localhost PKCE flow (`link-atlassian.py`) that uses Atlassian's MCP Dynamic Client Registration (RFC 7591). This approach works with managed Atlassian orgs that block API tokens and third-party OAuth apps - localhost redirect URIs are allowlisted by default.
+
+The broker also needs an OAuth token for session initialization (tool discovery at startup). This is stored in a Secret via `credentialRef`.
+
+See [atlassian-oauth-setup.md](atlassian-oauth-setup.md) for the full step-by-step setup guide, including what approaches failed and why.
 
 ## Deploy
 
-1. Set your Atlassian PAT (used by the broker for session initialization):
+1. Register a dynamic OAuth client (see setup guide Step 1) and update `ATLASSIAN_CLIENT_ID` in `link-atlassian.py`.
+
+2. Link at least one user's Atlassian account:
 
 ```bash
-export ATLASSIAN_PAT="your-atlassian-api-token"
+python3 link-atlassian.py \
+  --keycloak-user <username> \
+  --keycloak-url "https://<KEYCLOAK_HOST>" \
+  --keycloak-admin <admin-user> \
+  --keycloak-admin-pass "<admin-password>"
 ```
 
-2. Create the secret:
+3. Create the broker secret with an OAuth token:
 
 ```bash
+export ATLASSIAN_TOKEN="<oauth-token-from-linked-user>"
 envsubst < secret.yaml.tmpl | oc apply -f -
+oc label secret atlassian-mcp-token -n mcp-test mcp.kuadrant.io/secret=true
 ```
 
-3. Apply the ServiceEntry, DestinationRule, HTTPRoute, MCPServerRegistration, and AuthPolicy:
+4. Apply the ServiceEntry, DestinationRule, HTTPRoute, MCPServerRegistration, and AuthPolicy:
 
 ```bash
 oc apply -k .
 ```
 
-4. Verify the registration:
+5. Verify the registration:
 
 ```bash
 oc get mcpserverregistration -n mcp-test
@@ -54,16 +66,19 @@ The `atlassian-mcp-server` entry should show `Ready=True`. All tools will be pre
 ## How it works
 
 ```
-Client -> mcp listener -> Broker -> mcps listener -> Authorino (PAT injection)
-  -> URLRewrite (host: mcp.atlassian.com) -> TLS origination (DestinationRule)
+Client -> mcp listener -> Broker -> mcps listener -> Authorino (OAuth token injection)
+  -> URLRewrite (host: mcp.atlassian.com)
+  -> RequestHeaderModifier (Accept: application/json, text/event-stream)
+  -> TLS origination (DestinationRule)
   -> mcp.atlassian.com:443/v1/mcp
 ```
 
 Key resources:
 - **ServiceEntry**: Registers `mcp.atlassian.com` in Istio's service registry
 - **DestinationRule**: TLS origination with SNI to mcp.atlassian.com
-- **HTTPRoute**: Routes `atlassian.mcp.local` to external service via `kind: Hostname` backend, rewrites Host header
-- **AuthPolicy**: Per-user PAT injection from Keycloak userinfo
+- **HTTPRoute**: Routes `atlassian.mcp.local` to external service via `kind: Hostname` backend, rewrites Host header, sets Accept header
+- **AuthPolicy**: Per-user OAuth token injection from Keycloak userinfo
+- **link-atlassian.py**: Local PKCE flow to link Atlassian accounts to Keycloak
 
 ## Cleanup
 

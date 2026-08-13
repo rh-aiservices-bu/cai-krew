@@ -16,13 +16,13 @@ spec:
         - predicate: '!request.headers.exists(h, h == ''x-mcp-toolname'')'
       keycloak:
         jwt:
-          issuerUrl: https://sso.apps.cluster-86gng.dyn.redhatworkshops.io/realms/mcp
+          issuerUrl: https://<KEYCLOAK_HOST>/realms/mcp
         when:
         - predicate: request.headers.exists(h, h == 'x-mcp-toolname')
     metadata:
       atlasuserinfo:
         http:
-          url: "https://sso.apps.cluster-86gng.dyn.redhatworkshops.io/realms/mcp/protocol/openid-connect/userinfo"
+          url: "https://<KEYCLOAK_HOST>/realms/mcp/protocol/openid-connect/userinfo"
           headers:
             Authorization:
               selector: context.request.http.headers.authorization
