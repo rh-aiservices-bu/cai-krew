@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: excalidraw-mcp-server
+  namespace: mcp-test
+  labels:
+    app: excalidraw-mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: excalidraw-mcp-server
+  template:
+    metadata:
+      labels:
+        app: excalidraw-mcp-server
+    spec:
+      containers:
+        - name: excalidraw-mcp-server
+          image: quay.io/rcarrata/excalidraw-mcp-server:v4
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

@@ -1,0 +1,14 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: excalidraw-mcp-authz-policy
+  namespace: mcp-test
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: excalidraw-mcp-server-route
+  rules:
+    authentication:
+      anonymous:
+        anonymous: {}

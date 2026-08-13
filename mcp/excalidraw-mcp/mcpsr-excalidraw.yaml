@@ -1,0 +1,13 @@
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPServerRegistration
+metadata:
+  name: excalidraw-mcp-server
+  namespace: mcp-test
+spec:
+  prefix: "excalidraw_"
+  path: "/mcp"
+  targetRef:
+    group: "gateway.networking.k8s.io"
+    kind: "HTTPRoute"
+    name: "excalidraw-mcp-server-route"
+    namespace: "mcp-test"

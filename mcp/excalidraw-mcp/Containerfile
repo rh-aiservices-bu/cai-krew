@@ -1,0 +1,22 @@
+FROM registry.access.redhat.com/ubi9/nodejs-20:latest
+
+WORKDIR /opt/app-root
+
+RUN npm install -g pnpm@10
+
+RUN git clone https://github.com/excalidraw/excalidraw-mcp.git app && \
+    cd app && \
+    pnpm install && \
+    pnpm run build
+
+WORKDIR /opt/app-root/app
+
+# Patch MCP SDK Accept header validation (returns 406 without it, but MCP Gateway router doesn't send Accept header)
+RUN sed -i 's|return this.createJsonErrorResponse(406, -32000, "Not Acceptable: Client must accept both application/json and text/event-stream");|/* patched: accept header check disabled */|g' dist/index.js && \
+    sed -i 's|return this.createJsonErrorResponse(406, -32000, "Not Acceptable: Client must accept text/event-stream");|/* patched: accept header check disabled */|g' dist/index.js
+
+EXPOSE 8080
+
+ENV PORT=8080
+
+CMD ["node", "dist/index.js"]

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: excalidraw-mcp-server
+  namespace: mcp-test
+  labels:
+    app: excalidraw-mcp-server
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: excalidraw-mcp-server
