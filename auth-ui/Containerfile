@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py chibi-hermie.png ./
+COPY app.py chibi-hermie.png link-atlassian.py ./
 
 # Run as non-root
 RUN useradd -u 1001 -r -g 0 -s /sbin/nologin authui && \

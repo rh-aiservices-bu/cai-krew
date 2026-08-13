@@ -64,12 +64,10 @@ USERINFO_URL = f"{KEYCLOAK_BASE}/protocol/openid-connect/userinfo"
 
 SESSION_SECRET = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
 
-# Atlassian MCP OAuth (dynamic client registration — first-party, not subject to managed org restrictions)
-ATLASSIAN_CLIENT_ID   = ""
-ATLASSIAN_AUTH_URL    = "https://mcp.atlassian.com/v1/authorize"
-ATLASSIAN_TOKEN_URL   = "https://cf.mcp.atlassian.com/v1/token"
-_auth_ui_base         = REDIRECT_URI.rsplit("/", 1)[0]
-ATLASSIAN_REDIRECT_URI = _auth_ui_base + "/atlassian-callback"
+# Atlassian MCP OAuth — localhost PKCE client (registered 2026-08-13)
+# Users run link-atlassian.py locally, then paste tokens here for storage.
+ATLASSIAN_CLIENT_ID = "BHEAUa4btXKyLVTl"
+ATLASSIAN_TOKEN_URL = "https://cf.mcp.atlassian.com/v1/token"
 
 # ---------------------------------------------------------------------------
 # Embed chibi mascot image as base64 (avoids need for static file serving)
@@ -86,8 +84,6 @@ if _chibi_path.exists():
 
 # state → {"verifier": str, "created_at": float}
 _pkce_store: dict[str, dict] = {}
-# state → {"verifier": str, "sub": str, "created_at": float}
-_atlassian_pkce_store: dict[str, dict] = {}
 _STATE_TTL = 600
 
 # session_id → {access_token, refresh_token, id_token, user_info, slack_user_id,
@@ -780,8 +776,8 @@ async def dashboard(request: Request, msg: str = "", error: str = ""):
             f'💬 Open Slack {_SVG_LINK}</a>'
         )
     quick_link_buttons.append(
-        f'<a href="/atlassian-link" class="btn-app btn-app-atlassian">'
-        f'🔵 Connect Atlassian</a>'
+        f'<a href="/atlassian-script" class="btn-app btn-app-atlassian">'
+        f'🔵 Download Jira Script {_SVG_LINK}</a>'
     )
 
     quick_links_card = ""
@@ -818,7 +814,10 @@ async def dashboard(request: Request, msg: str = "", error: str = ""):
       <div class="card-body">
         <div class="row">
           <span class="label">Personal Access Token</span>
-          <span>{_pat_display(gitea_pat)}</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span>{_pat_display(gitea_pat)}</span>
+            {'<form method="post" action="/test-connection" style="margin:0"><input type="hidden" name="service" value="gitea"><button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:0.78rem">Test</button></form>' if gitea_pat else ''}
+          </div>
         </div>
         {pat_hint}
         <form method="post" action="/update-pat">
@@ -834,12 +833,22 @@ async def dashboard(request: Request, msg: str = "", error: str = ""):
       <div class="card-body">
         <div class="row">
           <span class="label">OAuth Status</span>
-          <span>{'<span class="badge badge-green">Connected</span>' if atlassian_oauth_token else '<span class="badge badge-gray">Not connected</span>'}</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span>{'<span class="badge badge-green">Connected</span>' if atlassian_oauth_token else '<span class="badge badge-gray">Not connected</span>'}</span>
+            {'<form method="post" action="/test-connection" style="margin:0"><input type="hidden" name="service" value="atlassian"><button type="submit" class="btn btn-secondary" style="padding:4px 12px;font-size:0.78rem">Test</button></form>' if atlassian_oauth_token else ''}
+          </div>
         </div>
-        <div class="pat-hint">Authorize Hermie to access Jira on your behalf via Atlassian&rsquo;s secure OAuth login. Your token is refreshed automatically.</div>
-        <div class="actions">
-          <a href="/atlassian-link" class="btn btn-primary">{"Reconnect Atlassian" if atlassian_oauth_token else "Connect Atlassian"}</a>
+        <div class="pat-hint" style="margin-top:10px">
+          <strong>Step 1:</strong> <a href="/atlassian-script" class="ext-link">Download link-atlassian.py {_SVG_LINK}</a>
+          and run it on your laptop:<br>
+          <code style="display:block;background:#f5f5f4;padding:8px 12px;border-radius:8px;margin:8px 0;font-size:0.82rem">python3 link-atlassian.py</code>
+          <strong>Step 2:</strong> Copy the two tokens it prints and paste them below.
         </div>
+        <form method="post" action="/atlassian-connect" style="margin-top:14px">
+          <input type="password" name="access_token" placeholder="Access token (starts with eyJ...)" autocomplete="off" required>
+          <input type="password" name="refresh_token" placeholder="Refresh token (starts with eyJ...)" autocomplete="off" required>
+          <button type="submit" class="btn btn-primary">{"Reconnect" if atlassian_oauth_token else "Connect Atlassian"}</button>
+        </form>
       </div>
     </div>
     """
@@ -850,7 +859,7 @@ async def dashboard(request: Request, msg: str = "", error: str = ""):
 async def update_pat(request: Request, service: str = Form(...), pat: str = Form(...)):
     session = _get_session(request)
     if not session:
-        return RedirectResponse("/")
+        return RedirectResponse("/", status_code=302)
 
     pat = pat.strip()
     if not pat:
@@ -900,87 +909,157 @@ def logout(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Atlassian MCP OAuth PKCE flow
+# Atlassian token paste + validate flow
 # ---------------------------------------------------------------------------
 
-@app.get("/atlassian-link")
-def atlassian_link(request: Request):
-    """Start PKCE flow to Atlassian MCP OAuth. User must be signed into the portal."""
+_ATLASSIAN_SCRIPT_PATH = Path(__file__).parent / "link-atlassian.py"
+
+
+@app.get("/atlassian-script")
+def atlassian_script():
+    """Serve link-atlassian.py as a download."""
+    if not _ATLASSIAN_SCRIPT_PATH.exists():
+        raise HTTPException(404, "Script not found")
+    content = _ATLASSIAN_SCRIPT_PATH.read_bytes()
+    return Response(
+        content=content,
+        media_type="text/x-python",
+        headers={"Content-Disposition": "attachment; filename=link-atlassian.py"},
+    )
+
+
+@app.post("/atlassian-connect")
+async def atlassian_connect(
+    request: Request,
+    access_token: str = Form(...),
+    refresh_token: str = Form(...),
+):
+    """Validate Atlassian tokens via refresh grant, then store in Keycloak."""
     session = _get_session(request)
     if not session:
-        return RedirectResponse("/")
-    _prune(_atlassian_pkce_store, "created_at", _STATE_TTL)
-    verifier, challenge = _pkce_pair()
-    state = secrets.token_urlsafe(16)
-    _atlassian_pkce_store[state] = {
-        "verifier": verifier,
-        "sub": session["sub"],
-        "created_at": time.time(),
-    }
-    scopes = "read:jira-work write:jira-work read:jira-user offline_access"
-    auth_url = (
-        f"{ATLASSIAN_AUTH_URL}?client_id={ATLASSIAN_CLIENT_ID}&response_type=code"
-        f"&scope={scopes.replace(' ', '%20')}"
-        f"&redirect_uri={ATLASSIAN_REDIRECT_URI}&state={state}"
-        f"&code_challenge={challenge}&code_challenge_method=S256"
-    )
-    return RedirectResponse(auth_url)
+        return RedirectResponse("/", status_code=302)
 
+    access_token  = access_token.strip()
+    refresh_token = refresh_token.strip()
 
-@app.get("/atlassian-callback")
-async def atlassian_callback(
-    request: Request,
-    code: str = Query(None),
-    state: str = Query(None),
-    error: str = Query(None),
-    error_description: str = Query(None),
-):
-    if error:
-        desc = error_description or error
-        logger.warning("Atlassian returned error: %s — %s", error, desc)
-        return RedirectResponse(f"/dashboard?error=Atlassian+error:+{desc[:80]}", status_code=302)
+    if not access_token or not refresh_token:
+        return RedirectResponse("/dashboard?error=Both+tokens+are+required", status_code=302)
 
-    if not code or not state:
-        return RedirectResponse("/dashboard?error=Missing+code+or+state+from+Atlassian", status_code=302)
-
-    _prune(_atlassian_pkce_store, "created_at", _STATE_TTL)
-    entry = _atlassian_pkce_store.pop(state, None)
-    if not entry:
-        raise HTTPException(400, "Invalid or expired state. Please try connecting again.")
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(ATLASSIAN_TOKEN_URL, data={
-            "grant_type": "authorization_code",
-            "client_id": ATLASSIAN_CLIENT_ID,
-            "code": code,
-            "redirect_uri": ATLASSIAN_REDIRECT_URI,
-            "code_verifier": entry["verifier"],
-        })
-
-    if resp.status_code != 200:
-        logger.error("Atlassian token exchange failed: %s %s", resp.status_code, resp.text)
-        return RedirectResponse(
-            f"/dashboard?error=Atlassian+token+exchange+failed+({resp.status_code})", status_code=302
+    # Validate by calling the refresh grant — if it works, both tokens are good.
+    # We store the fresh access_token from the response (guaranteed not stale).
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(
+            ATLASSIAN_TOKEN_URL,
+            data={
+                "grant_type":    "refresh_token",
+                "client_id":     ATLASSIAN_CLIENT_ID,
+                "refresh_token": refresh_token,
+            },
+            headers={"User-Agent": "mcp-gateway-portal/1.0"},
         )
 
-    tokens = resp.json()
-    access_token = tokens.get("access_token", "")
-    refresh_token = tokens.get("refresh_token", "")
-    if not access_token:
-        return RedirectResponse("/dashboard?error=No+access_token+in+Atlassian+response", status_code=302)
+    if resp.status_code != 200:
+        logger.warning("Atlassian token validation failed: %s %s", resp.status_code, resp.text[:200])
+        return RedirectResponse(
+            f"/dashboard?error=Token+validation+failed+({resp.status_code})+-+did+you+copy+the+tokens+correctly%3F",
+            status_code=302,
+        )
+
+    fresh = resp.json()
+    new_access  = fresh.get("access_token", access_token)  # use refreshed token
+    new_refresh = fresh.get("refresh_token", refresh_token)
 
     try:
-        await _update_kc_attribute(entry["sub"], "atlassian_oauth_token", access_token)
-        if refresh_token:
-            await _update_kc_attribute(entry["sub"], "atlassian_oauth_refresh", refresh_token)
-        logger.info("Stored Atlassian OAuth tokens for sub=%s", entry["sub"])
+        user_sub = session["sub"]
+        await _update_kc_attribute(user_sub, "atlassian_oauth_token",   new_access)
+        await _update_kc_attribute(user_sub, "atlassian_oauth_refresh",  new_refresh)
+        logger.info("Stored Atlassian tokens for sub=%s", user_sub)
+        # Refresh session userinfo so dashboard shows updated status immediately
+        async with httpx.AsyncClient(verify=False, timeout=15) as client:
+            ui_resp = await client.get(
+                USERINFO_URL, headers={"Authorization": f"Bearer {session['access_token']}"}
+            )
+        if ui_resp.status_code == 200:
+            session["user_info"] = ui_resp.json()
     except Exception as exc:
-        logger.exception("Failed to store Atlassian tokens in Keycloak: %s", exc)
+        logger.exception("Failed to store Atlassian tokens: %s", exc)
         return RedirectResponse(
             f"/dashboard?error=Failed+to+store+tokens:+{str(exc)[:80]}", status_code=302
         )
 
     return RedirectResponse("/dashboard?msg=Atlassian+connected+successfully", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Connection test endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/test-connection")
+async def test_connection(request: Request, service: str = Form(...)):
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse("/", status_code=302)
+
+    user_info = session.get("user_info", {})
+
+    if service == "gitea":
+        gitea_pat = user_info.get("gitea_pat", "")
+        if not gitea_pat:
+            return RedirectResponse("/dashboard?error=No+Gitea+PAT+stored", status_code=302)
+        if not GITEA_URL:
+            return RedirectResponse("/dashboard?error=GITEA_URL+not+configured", status_code=302)
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10) as client:
+                resp = await client.get(
+                    f"{GITEA_URL}/api/v1/user",
+                    headers={"Authorization": f"token {gitea_pat}"},
+                )
+            if resp.status_code == 200:
+                gitea_user = resp.json().get("login", "unknown")
+                return RedirectResponse(
+                    f"/dashboard?msg=Gitea+PAT+valid+%E2%80%94+logged+in+as+{gitea_user}",
+                    status_code=302,
+                )
+            else:
+                return RedirectResponse(
+                    f"/dashboard?error=Gitea+PAT+invalid+(HTTP+{resp.status_code})", status_code=302
+                )
+        except Exception as exc:
+            return RedirectResponse(f"/dashboard?error=Gitea+test+failed:+{str(exc)[:60]}", status_code=302)
+
+    elif service == "atlassian":
+        atlassian_token = user_info.get("atlassian_oauth_token", "")
+        atlassian_refresh = user_info.get("atlassian_oauth_refresh", "")
+        if not atlassian_refresh:
+            return RedirectResponse("/dashboard?error=No+Atlassian+token+stored", status_code=302)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    ATLASSIAN_TOKEN_URL,
+                    data={
+                        "grant_type":    "refresh_token",
+                        "client_id":     ATLASSIAN_CLIENT_ID,
+                        "refresh_token": atlassian_refresh,
+                    },
+                    headers={"User-Agent": "mcp-gateway-portal/1.0"},
+                )
+            if resp.status_code == 200:
+                expires_in = resp.json().get("expires_in", "?")
+                return RedirectResponse(
+                    f"/dashboard?msg=Atlassian+token+valid+%E2%80%94+expires+in+{expires_in}s",
+                    status_code=302,
+                )
+            else:
+                return RedirectResponse(
+                    f"/dashboard?error=Atlassian+token+invalid+(HTTP+{resp.status_code})+%E2%80%94+re-run+link-atlassian.py",
+                    status_code=302,
+                )
+        except Exception as exc:
+            return RedirectResponse(
+                f"/dashboard?error=Atlassian+test+failed:+{str(exc)[:60]}", status_code=302
+            )
+
+    return RedirectResponse("/dashboard?error=Unknown+service", status_code=302)
 
 
 # ---------------------------------------------------------------------------

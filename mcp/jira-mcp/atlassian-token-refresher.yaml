@@ -21,7 +21,7 @@ stringData:
   keycloak-realm: "mcp"
   client-id: "mcp-gateway"
   client-secret: "mcp"
-  atlassian-client-id: ""
+  atlassian-client-id: "UzGdEREi7r8Zs_W9"
   atlassian-token-url: "https://cf.mcp.atlassian.com/v1/token"
   atlassian-secret-name: "atlassian-mcp-token"
   atlassian-secret-key: "token"
