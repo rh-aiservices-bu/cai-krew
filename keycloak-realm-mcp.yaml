@@ -248,6 +248,28 @@ spec:
           id.token.claim: 'false'
           userinfo.token.claim: 'true'
           jsonType.label: String
+      - name: atlassian-oauth-token-userinfo
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-attribute-mapper
+        consentRequired: false
+        config:
+          user.attribute: atlassian_oauth_token
+          claim.name: atlassian_oauth_token
+          access.token.claim: 'false'
+          id.token.claim: 'false'
+          userinfo.token.claim: 'true'
+          jsonType.label: String
+      - name: atlassian-oauth-refresh-userinfo
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-attribute-mapper
+        consentRequired: false
+        config:
+          user.attribute: atlassian_oauth_refresh
+          claim.name: atlassian_oauth_refresh
+          access.token.claim: 'false'
+          id.token.claim: 'false'
+          userinfo.token.claim: 'true'
+          jsonType.label: String
       - name: slack-user-id
         protocol: openid-connect
         protocolMapper: oidc-usermodel-attribute-mapper

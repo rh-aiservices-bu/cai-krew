@@ -33,6 +33,6 @@ spec:
         headers:
           authorization:
             plain:
-              selector: "Bearer {auth.metadata.atlasuserinfo.atlassian_pat}"
+              selector: "Bearer {auth.metadata.atlasuserinfo.atlassian_oauth_token}"
             when:
-            - predicate: "'atlasuserinfo' in auth.metadata && auth.metadata.atlasuserinfo.atlassian_pat != ''"
+            - predicate: "'atlasuserinfo' in auth.metadata && auth.metadata.atlasuserinfo.atlassian_oauth_token != ''"

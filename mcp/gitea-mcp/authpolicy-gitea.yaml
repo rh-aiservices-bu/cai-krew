@@ -1,0 +1,56 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: gitea-mcp-authz-policy
+  namespace: mcp-test
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: gitea-mcp-server-route
+  rules:
+    authentication:
+      anonymous:
+        anonymous: {}
+        when:
+        - predicate: '!request.headers.exists(h, h == ''x-mcp-toolname'')'
+      keycloak:
+        jwt:
+          issuerUrl: https://sso.apps.cluster-86gng.dyn.redhatworkshops.io/realms/mcp
+        when:
+        - predicate: request.headers.exists(h, h == 'x-mcp-toolname')
+    metadata:
+      giteauserinfo:
+        http:
+          url: "https://sso.apps.cluster-86gng.dyn.redhatworkshops.io/realms/mcp/protocol/openid-connect/userinfo"
+          headers:
+            Authorization:
+              selector: context.request.http.headers.authorization
+        when:
+        - predicate: request.headers.exists(h, h == 'x-mcp-toolname')
+    authorization:
+      tool-access-check:
+        patternMatching:
+          patterns:
+          - predicate: |
+              ('tool:' + request.headers['x-mcp-toolname']) in (has(auth.identity.resource_access) && auth.identity.resource_access.exists(p, p == request.headers['x-mcp-servername']) ? auth.identity.resource_access[request.headers['x-mcp-servername']].roles : [])
+        when:
+        - predicate: request.headers.exists(h, h == 'x-mcp-toolname')
+    response:
+      success:
+        headers:
+          authorization:
+            # Inject the user's Gitea PAT as the Authorization header, replacing the Keycloak JWT.
+            # gitea_pat is stored as the raw PAT token value in Keycloak user attributes.
+            # Users without gitea_pat set: no header injected, gitea-mcp-server falls back to GITEA_ACCESS_TOKEN.
+            plain:
+              selector: "token {auth.metadata.giteauserinfo.gitea_pat}"
+            when:
+            - predicate: "'giteauserinfo' in auth.metadata && auth.metadata.giteauserinfo.gitea_pat != ''"
+      unauthorized:
+        body:
+          value: |
+            {
+              "error": "Forbidden",
+              "message": "MCP Tool Access denied: Insufficient permissions for this tool."
+            }

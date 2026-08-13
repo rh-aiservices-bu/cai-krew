@@ -6,3 +6,4 @@ resources:
   - httproute-atlassian.yaml
   - mcpsr-atlassian.yaml
   - authpolicy-atlassian.yaml
+  - atlassian-token-refresher.yaml

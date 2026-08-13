@@ -1,0 +1,259 @@
+# Atlassian OAuth token refresher
+# Runs every 45 min: reads atlassian_oauth_refresh from each Keycloak user,
+# calls cf.mcp.atlassian.com/v1/token, writes new tokens back to Keycloak attributes,
+# and updates the atlassian-mcp-token Secret (used by broker for initialization).
+#
+# Apply:  oc apply -f atlassian-token-refresher.yaml
+# Remove: oc delete -f atlassian-token-refresher.yaml
+# Trigger immediately:
+#   oc create job --from=cronjob/atlassian-token-refresher atlassian-refresh-now -n mcp-test
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: atlassian-token-refresher-credentials
+  namespace: mcp-test
+  labels:
+    app: atlassian-mcp
+type: Opaque
+stringData:
+  keycloak-base: "https://sso.apps.cluster-86gng.dyn.redhatworkshops.io"
+  keycloak-realm: "mcp"
+  client-id: "mcp-gateway"
+  client-secret: "mcp"
+  atlassian-client-id: ""
+  atlassian-token-url: "https://cf.mcp.atlassian.com/v1/token"
+  atlassian-secret-name: "atlassian-mcp-token"
+  atlassian-secret-key: "token"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atlassian-token-refresher
+  namespace: mcp-test
+  labels:
+    app: atlassian-mcp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atlassian-token-refresher
+  namespace: mcp-test
+  labels:
+    app: atlassian-mcp
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atlassian-token-refresher
+  namespace: mcp-test
+  labels:
+    app: atlassian-mcp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: atlassian-token-refresher
+subjects:
+- kind: ServiceAccount
+  name: atlassian-token-refresher
+  namespace: mcp-test
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atlassian-token-refresher-script
+  namespace: mcp-test
+  labels:
+    app: atlassian-mcp
+data:
+  refresh.py: |
+    #!/usr/bin/env python3
+    """Refresh Atlassian OAuth tokens for all Keycloak users and update the broker secret."""
+    import base64, json, os, ssl, time, urllib.parse, urllib.request
+
+    KC_BASE         = open("/credentials/keycloak-base").read().strip()
+    KC_REALM        = open("/credentials/keycloak-realm").read().strip()
+    CLIENT_ID       = open("/credentials/client-id").read().strip()
+    CLIENT_SECRET   = open("/credentials/client-secret").read().strip()
+    ATL_CLIENT_ID   = open("/credentials/atlassian-client-id").read().strip()
+    ATL_TOKEN_URL   = open("/credentials/atlassian-token-url").read().strip()
+    ATL_SECRET_NAME = open("/credentials/atlassian-secret-name").read().strip()
+    ATL_SECRET_KEY  = open("/credentials/atlassian-secret-key").read().strip()
+
+    KC_ADMIN_BASE = f"{KC_BASE}/admin/realms/{KC_REALM}"
+    KC_TOKEN_URL  = f"{KC_BASE}/realms/{KC_REALM}/protocol/openid-connect/token"
+
+    # Skip TLS verification for self-signed Keycloak cert
+    kc_ctx = ssl.create_default_context()
+    kc_ctx.check_hostname = False
+    kc_ctx.verify_mode    = ssl.CERT_NONE
+
+    # Atlassian uses a valid public cert
+    atl_ctx = ssl.create_default_context()
+
+
+    def _post(url, data, ctx):
+        body = urllib.parse.urlencode(data).encode()
+        req  = urllib.request.Request(url, data=body, method="POST")
+        with urllib.request.urlopen(req, context=ctx, timeout=20) as r:
+            return json.loads(r.read())
+
+
+    def _get(url, token, ctx):
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, context=ctx, timeout=20) as r:
+            return json.loads(r.read())
+
+
+    def _put(url, token, body, ctx):
+        data = json.dumps(body).encode()
+        req  = urllib.request.Request(
+            url, data=data, method="PUT",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, context=ctx, timeout=20) as r:
+            return r.status
+
+
+    stamp = lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # 1. Get Keycloak admin token via client_credentials
+    print(f"[{stamp()}] Getting Keycloak admin token...")
+    kc_admin_token = _post(KC_TOKEN_URL, {
+        "grant_type":    "client_credentials",
+        "client_id":     CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+    }, ctx=kc_ctx)["access_token"]
+
+    # 2. List all users (up to 200 — enough for this deployment)
+    users = _get(f"{KC_ADMIN_BASE}/users?max=200", kc_admin_token, ctx=kc_ctx)
+    print(f"Found {len(users)} users in realm '{KC_REALM}'.")
+
+    ok = failed = 0
+    first_access_token = None
+
+    for user in users:
+        uid      = user["id"]
+        username = user.get("username", uid)
+        attrs    = user.get("attributes") or {}
+        refresh_vals = attrs.get("atlassian_oauth_refresh", [])
+        if not refresh_vals:
+            continue
+
+        refresh_token = refresh_vals[0]
+        print(f"  [{stamp()}] Refreshing {username}...", end=" ", flush=True)
+
+        try:
+            resp = _post(ATL_TOKEN_URL, {
+                "grant_type":    "refresh_token",
+                "client_id":     ATL_CLIENT_ID,
+                "refresh_token": refresh_token,
+            }, ctx=atl_ctx)
+        except Exception as exc:
+            print(f"FAIL (token request): {exc}")
+            failed += 1
+            continue
+
+        new_access  = resp.get("access_token", "")
+        new_refresh = resp.get("refresh_token", refresh_token)  # rotate if Atlassian provides a new one
+
+        if not new_access:
+            print(f"FAIL (no access_token): {resp.get('error', resp)}")
+            failed += 1
+            continue
+
+        # Write updated tokens back to Keycloak user attributes
+        try:
+            user_rep = _get(f"{KC_ADMIN_BASE}/users/{uid}", kc_admin_token, ctx=kc_ctx)
+            up_attrs = dict(user_rep.get("attributes") or {})
+            up_attrs["atlassian_oauth_token"]  = [new_access]
+            up_attrs["atlassian_oauth_refresh"] = [new_refresh]
+            user_rep["attributes"] = up_attrs
+            _put(f"{KC_ADMIN_BASE}/users/{uid}", kc_admin_token, user_rep, ctx=kc_ctx)
+            expires_in = resp.get("expires_in", "?")
+            print(f"OK (expires_in={expires_in}s)")
+            ok += 1
+            if first_access_token is None:
+                first_access_token = new_access
+        except Exception as exc:
+            print(f"FAIL (Keycloak update): {exc}")
+            failed += 1
+
+    print(f"\n[{stamp()}] Done — ok={ok} failed={failed}")
+
+    # 3. Update the broker secret so MCPSR can re-initialize with a fresh Bearer token
+    if first_access_token is None:
+        print("No valid token obtained — broker secret not updated.")
+    else:
+        sa_token  = open("/var/run/secrets/kubernetes.io/serviceaccount/token").read().strip()
+        namespace = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()
+        k8s_host  = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+        k8s_port  = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+        ca_path   = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+        k8s_ctx    = ssl.create_default_context(cafile=ca_path)
+        secret_url = (f"https://{k8s_host}:{k8s_port}/api/v1/namespaces"
+                      f"/{namespace}/secrets/{ATL_SECRET_NAME}")
+
+        bearer_b64 = base64.b64encode(f"Bearer {first_access_token}".encode()).decode()
+        patch_body = json.dumps({"data": {ATL_SECRET_KEY: bearer_b64}}).encode()
+        req = urllib.request.Request(
+            secret_url, data=patch_body, method="PATCH",
+            headers={
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/strategic-merge-patch+json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, context=k8s_ctx, timeout=10) as r:
+                print(f"Broker secret '{ATL_SECRET_NAME}' updated (HTTP {r.status}).")
+        except Exception as exc:
+            print(f"WARNING: could not update broker secret: {exc}")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: atlassian-token-refresher
+  namespace: mcp-test
+  labels:
+    app: atlassian-mcp
+spec:
+  schedule: "*/45 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 120
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: atlassian-token-refresher
+        spec:
+          serviceAccountName: atlassian-token-refresher
+          restartPolicy: OnFailure
+          containers:
+          - name: refresher
+            image: "python:3.12-slim"
+            imagePullPolicy: IfNotPresent
+            command: ["python3", "/scripts/refresh.py"]
+            volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: credentials
+              mountPath: /credentials
+              readOnly: true
+          volumes:
+          - name: scripts
+            configMap:
+              name: atlassian-token-refresher-script
+              defaultMode: 0755
+          - name: credentials
+            secret:
+              secretName: atlassian-token-refresher-credentials

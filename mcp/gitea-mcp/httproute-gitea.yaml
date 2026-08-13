@@ -9,6 +9,7 @@ spec:
   parentRefs:
     - name: mcp-gateway
       namespace: mcp-gateway
+      sectionName: mcps
   hostnames:
     - "gitea-mcp-server.mcp.local"
   rules:
@@ -19,3 +20,7 @@ spec:
       backendRefs:
         - name: gitea-mcp-server
           port: 8080
+      # No Authorization filter here — Authorino (gitea-mcp-authz-policy) replaces
+      # the Keycloak JWT with the user's Gitea PAT (token <pat>) before forwarding.
+      # If a user has no gitea_pat attribute set, no header is injected and
+      # gitea-mcp-server falls back to GITEA_ACCESS_TOKEN.
