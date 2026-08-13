@@ -1,0 +1,588 @@
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: '{"apiVersion":"k8s.keycloak.org/v2alpha1","kind":"KeycloakRealmImport","metadata":{"annotations":{},"name":"mcp","namespace":"keycloak","resourceVersion":"5816251"},"spec":{"keycloakCRName":"keycloak","realm":{"bruteForceProtected":true,"clientScopeMappings":{"mcp-test/gitea-mcp-server":[{"client":"mcp-gateway","roles":["tool:actions_config_read","tool:actions_config_write","tool:actions_run_read","tool:actions_run_write","tool:attachment_read","tool:create_branch","tool:create_or_update_file","tool:create_release","tool:create_repo","tool:create_tag","tool:delete_branch","tool:delete_file","tool:delete_release","tool:delete_tag","tool:fork_repo","tool:get_commit","tool:get_dir_contents","tool:get_file_contents","tool:get_gitea_mcp_server_version","tool:get_latest_release","tool:get_me","tool:get_release","tool:get_repository_tree","tool:get_tag","tool:get_user_orgs","tool:issue_read","tool:issue_write","tool:label_read","tool:label_write","tool:list_branches","tool:list_commits","tool:list_issues","tool:list_my_repos","tool:list_org_repos","tool:list_pull_requests","tool:list_releases","tool:list_tags","tool:milestone_read","tool:milestone_write","tool:notification_read","tool:notification_write","tool:package_read","tool:package_write","tool:pull_request_read","tool:pull_request_review_write","tool:pull_request_write","tool:search_issues","tool:search_org_teams","tool:search_repos","tool:search_users","tool:timetracking_read","tool:timetracking_write","tool:wiki_read","tool:wiki_write"]}],"mcp-test/risk-server":[{"client":"mcp-gateway","roles":["tool:calculate_dti","tool:calculate_ltv","tool:evaluate_credit_risk","tool:assess_income_stability","tool:assess_asset_sufficiency","tool:generate_risk_recommendation"]}],"mcp-test/test-server1":[{"client":"mcp-gateway","roles":["tool:greet","tool:headers","tool:time","tool:slow","tool:add_tool"]}]},"clientScopes":[{"attributes":{"include.in.token.scope":"true"},"name":"groups","protocol":"openid-connect","protocolMappers":[{"config":{"access.token.claim":"true","claim.name":"groups","full.path":"false","id.token.claim":"true","introspection.token.claim":"true","userinfo.token.claim":"true"},"consentRequired":false,"name":"groups","protocol":"openid-connect","protocolMapper":"oidc-group-membership-mapper"}]},{"attributes":{"include.in.token.scope":"true"},"name":"roles","protocol":"openid-connect","protocolMappers":[{"config":{"access.token.claim":"true","claim.name":"resource_access.${client_id}.roles","id.token.claim":"true","jsonType.label":"String","multivalued":"true","userinfo.token.claim":"true"},"consentRequired":false,"name":"resource_access","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper"}]}],"clients":[{"attributes":{"client.secret.creation.time":"0","pkce.code.challenge.method":"S256"},"clientId":"mcp-gateway","defaultClientScopes":["openid","profile","email","roles","groups"],"directAccessGrantsEnabled":true,"enabled":true,"implicitFlowEnabled":false,"name":"MCP
+      Gateway Client","protocol":"openid-connect","publicClient":true,"redirectUris":["http://localhost:*","http://127.0.0.1:*","https://localhost:*"],"serviceAccountsEnabled":true,"standardFlowEnabled":true,"webOrigins":["*"]},{"bearerOnly":true,"clientId":"mcp-test/test-server1","defaultClientScopes":["openid"],"enabled":true,"name":"Test
+      Server 1 Resource","protocol":"openid-connect","publicClient":false,"serviceAccountsEnabled":false},{"bearerOnly":true,"clientId":"mcp-test/gitea-mcp-server","defaultClientScopes":["openid"],"enabled":true,"name":"Gitea
+      Server Resource","protocol":"openid-connect","publicClient":false,"serviceAccountsEnabled":false},{"bearerOnly":true,"clientId":"mcp-test/risk-server","defaultClientScopes":["openid"],"enabled":true,"name":"Risk
+      Server Resource","protocol":"openid-connect","publicClient":false,"serviceAccountsEnabled":false}],"defaultGroups":["mcp-users"],"duplicateEmailsAllowed":false,"editUsernameAllowed":false,"enabled":true,"groups":[{"name":"accounting","subGroups":[]},{"name":"engineering","subGroups":[]},{"name":"mcp-users","subGroups":[]}],"id":"mcp","loginWithEmailAllowed":true,"realm":"mcp","registrationAllowed":false,"resetPasswordAllowed":false,"roles":{"realm":[{"description":"Basic
+      MCP user role","name":"mcp-user"}]},"sslRequired":"none","users":[{"clientRoles":{"mcp-test/gitea-mcp-server":["tool:actions_config_read","tool:actions_config_write","tool:actions_run_read","tool:actions_run_write","tool:attachment_read","tool:create_branch","tool:create_or_update_file","tool:create_release","tool:create_repo","tool:create_tag","tool:delete_branch","tool:delete_file","tool:delete_release","tool:delete_tag","tool:fork_repo","tool:get_commit","tool:get_dir_contents","tool:get_file_contents","tool:get_gitea_mcp_server_version","tool:get_latest_release","tool:get_me","tool:get_release","tool:get_repository_tree","tool:get_tag","tool:get_user_orgs","tool:issue_read","tool:issue_write","tool:label_read","tool:label_write","tool:list_branches","tool:list_commits","tool:list_issues","tool:list_my_repos","tool:list_org_repos","tool:list_pull_requests","tool:list_releases","tool:list_tags","tool:milestone_read","tool:milestone_write","tool:notification_read","tool:notification_write","tool:package_read","tool:package_write","tool:pull_request_read","tool:pull_request_review_write","tool:pull_request_write","tool:search_issues","tool:search_org_teams","tool:search_repos","tool:search_users","tool:timetracking_read","tool:timetracking_write","tool:wiki_read","tool:wiki_write"],"mcp-test/risk-server":["tool:calculate_dti","tool:calculate_ltv","tool:evaluate_credit_risk","tool:assess_income_stability","tool:assess_asset_sufficiency","tool:generate_risk_recommendation"],"mcp-test/test-server1":["tool:greet","tool:headers","tool:time","tool:slow","tool:add_tool"]},"credentials":[{"temporary":false,"type":"password","value":"mcp"}],"email":"mcp@test.com","emailVerified":true,"enabled":true,"firstName":"mcp","groups":["accounting","engineering","mcp-users"],"lastName":"user","realmRoles":["mcp-user"],"username":"mcp"},{"clientRoles":{"mcp-test/test-server1":["tool:greet"]},"credentials":[{"temporary":false,"type":"password","value":"restricted"}],"email":"restricted@test.com","emailVerified":true,"enabled":true,"firstName":"restricted","groups":["mcp-users"],"lastName":"user","realmRoles":["mcp-user"],"username":"restricted"},{"clientRoles":{"mcp-test/gitea-mcp-server":["tool:actions_config_read","tool:actions_config_write","tool:actions_run_read","tool:actions_run_write","tool:attachment_read","tool:create_branch","tool:create_or_update_file","tool:create_release","tool:create_repo","tool:create_tag","tool:delete_branch","tool:delete_file","tool:delete_release","tool:delete_tag","tool:fork_repo","tool:get_commit","tool:get_dir_contents","tool:get_file_contents","tool:get_gitea_mcp_server_version","tool:get_latest_release","tool:get_me","tool:get_release","tool:get_repository_tree","tool:get_tag","tool:get_user_orgs","tool:issue_read","tool:issue_write","tool:label_read","tool:label_write","tool:list_branches","tool:list_commits","tool:list_issues","tool:list_my_repos","tool:list_org_repos","tool:list_pull_requests","tool:list_releases","tool:list_tags","tool:milestone_read","tool:milestone_write","tool:notification_read","tool:notification_write","tool:package_read","tool:package_write","tool:pull_request_read","tool:pull_request_review_write","tool:pull_request_write","tool:search_issues","tool:search_org_teams","tool:search_repos","tool:search_users","tool:timetracking_read","tool:timetracking_write","tool:wiki_read","tool:wiki_write"]},"enabled":true,"serviceAccountClientId":"mcp-gateway","username":"service-account-mcp-gateway"}]}}}
+
+      '
+  name: mcp
+  namespace: keycloak
+spec:
+  keycloakCRName: keycloak
+  realm:
+    bruteForceProtected: true
+    clientScopeMappings:
+      mcp-test/gitea-mcp-server:
+      - client: mcp-gateway
+        roles:
+        - tool:actions_config_read
+        - tool:actions_config_write
+        - tool:actions_run_read
+        - tool:actions_run_write
+        - tool:attachment_read
+        - tool:create_branch
+        - tool:create_or_update_file
+        - tool:create_release
+        - tool:create_repo
+        - tool:create_tag
+        - tool:delete_branch
+        - tool:delete_file
+        - tool:delete_release
+        - tool:delete_tag
+        - tool:fork_repo
+        - tool:get_commit
+        - tool:get_dir_contents
+        - tool:get_file_contents
+        - tool:get_gitea_mcp_server_version
+        - tool:get_latest_release
+        - tool:get_me
+        - tool:get_release
+        - tool:get_repository_tree
+        - tool:get_tag
+        - tool:get_user_orgs
+        - tool:issue_read
+        - tool:issue_write
+        - tool:label_read
+        - tool:label_write
+        - tool:list_branches
+        - tool:list_commits
+        - tool:list_issues
+        - tool:list_my_repos
+        - tool:list_org_repos
+        - tool:list_pull_requests
+        - tool:list_releases
+        - tool:list_tags
+        - tool:milestone_read
+        - tool:milestone_write
+        - tool:notification_read
+        - tool:notification_write
+        - tool:package_read
+        - tool:package_write
+        - tool:pull_request_read
+        - tool:pull_request_review_write
+        - tool:pull_request_write
+        - tool:search_issues
+        - tool:search_org_teams
+        - tool:search_repos
+        - tool:search_users
+        - tool:timetracking_read
+        - tool:timetracking_write
+        - tool:wiki_read
+        - tool:wiki_write
+      mcp-test/risk-server:
+      - client: mcp-gateway
+        roles:
+        - tool:calculate_dti
+        - tool:calculate_ltv
+        - tool:evaluate_credit_risk
+        - tool:assess_income_stability
+        - tool:assess_asset_sufficiency
+        - tool:generate_risk_recommendation
+      mcp-test/test-server1:
+      - client: mcp-gateway
+        roles:
+        - tool:greet
+        - tool:headers
+        - tool:time
+        - tool:slow
+        - tool:add_tool
+    clientScopes:
+    - attributes:
+        include.in.token.scope: 'true'
+      name: groups
+      protocol: openid-connect
+      protocolMappers:
+      - config:
+          access.token.claim: 'true'
+          claim.name: groups
+          full.path: 'false'
+          id.token.claim: 'true'
+          introspection.token.claim: 'true'
+          userinfo.token.claim: 'true'
+        consentRequired: false
+        name: groups
+        protocol: openid-connect
+        protocolMapper: oidc-group-membership-mapper
+    - attributes:
+        include.in.token.scope: 'true'
+      name: roles
+      protocol: openid-connect
+      protocolMappers:
+      - config:
+          access.token.claim: 'true'
+          claim.name: resource_access.${client_id}.roles
+          id.token.claim: 'true'
+          jsonType.label: String
+          multivalued: 'true'
+          userinfo.token.claim: 'true'
+        consentRequired: false
+        name: resource_access
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-client-role-mapper
+    - attributes:
+        include.in.token.scope: 'true'
+      name: profile
+      protocol: openid-connect
+      protocolMappers:
+      - config:
+          access.token.claim: 'true'
+          claim.name: preferred_username
+          id.token.claim: 'true'
+          jsonType.label: String
+          user.attribute: username
+          userinfo.token.claim: 'true'
+        consentRequired: false
+        name: username
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-property-mapper
+      - config:
+          access.token.claim: 'true'
+          id.token.claim: 'true'
+          userinfo.token.claim: 'true'
+        consentRequired: false
+        name: full name
+        protocol: openid-connect
+        protocolMapper: oidc-full-name-mapper
+      - config:
+          access.token.claim: 'true'
+          claim.name: given_name
+          id.token.claim: 'true'
+          jsonType.label: String
+          user.attribute: firstName
+          userinfo.token.claim: 'true'
+        consentRequired: false
+        name: given name
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-property-mapper
+      - config:
+          access.token.claim: 'true'
+          claim.name: family_name
+          id.token.claim: 'true'
+          jsonType.label: String
+          user.attribute: lastName
+          userinfo.token.claim: 'true'
+        consentRequired: false
+        name: family name
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-property-mapper
+    - attributes:
+        include.in.token.scope: 'true'
+      name: email
+      protocol: openid-connect
+      protocolMappers:
+      - config:
+          access.token.claim: 'true'
+          claim.name: email
+          id.token.claim: 'true'
+          jsonType.label: String
+          user.attribute: email
+          userinfo.token.claim: 'true'
+        consentRequired: false
+        name: email
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-property-mapper
+      - config:
+          access.token.claim: 'true'
+          claim.name: email_verified
+          id.token.claim: 'true'
+          user.attribute: emailVerified
+          userinfo.token.claim: 'true'
+        consentRequired: false
+        name: email verified
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-property-mapper
+    clients:
+    - attributes:
+        client.secret.creation.time: '0'
+        pkce.code.challenge.method: S256
+      clientId: mcp-gateway
+      defaultClientScopes:
+      - openid
+      - profile
+      - email
+      - roles
+      - groups
+      directAccessGrantsEnabled: true
+      enabled: true
+      implicitFlowEnabled: false
+      name: MCP Gateway Client
+      protocol: openid-connect
+      publicClient: false
+      redirectUris:
+      - http://localhost:*
+      - http://127.0.0.1:*
+      - https://localhost:*
+      - https://auth-ui.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com/callback
+      attributes:
+        post.logout.redirect.uris: https://auth-ui.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com
+      serviceAccountsEnabled: true
+      standardFlowEnabled: true
+      webOrigins:
+      - '*'
+      secret: mcp
+      protocolMappers:
+      - name: gitea-pat-userinfo
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-attribute-mapper
+        consentRequired: false
+        config:
+          user.attribute: gitea_pat
+          claim.name: gitea_pat
+          access.token.claim: 'false'
+          id.token.claim: 'false'
+          userinfo.token.claim: 'true'
+          jsonType.label: String
+      - name: atlassian-pat-userinfo
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-attribute-mapper
+        consentRequired: false
+        config:
+          user.attribute: atlassian_pat
+          claim.name: atlassian_pat
+          access.token.claim: 'false'
+          id.token.claim: 'false'
+          userinfo.token.claim: 'true'
+          jsonType.label: String
+      - name: slack-user-id
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-attribute-mapper
+        consentRequired: false
+        config:
+          user.attribute: slack_user_id
+          claim.name: slack_user_id
+          access.token.claim: 'true'
+          id.token.claim: 'true'
+          userinfo.token.claim: 'true'
+          jsonType.label: String
+    - bearerOnly: true
+      clientId: mcp-test/test-server1
+      defaultClientScopes:
+      - openid
+      enabled: true
+      name: Test Server 1 Resource
+      protocol: openid-connect
+      publicClient: false
+      serviceAccountsEnabled: false
+    - bearerOnly: true
+      clientId: mcp-test/gitea-mcp-server
+      defaultClientScopes:
+      - openid
+      enabled: true
+      name: Gitea Server Resource
+      protocol: openid-connect
+      publicClient: false
+      serviceAccountsEnabled: false
+    - bearerOnly: true
+      clientId: mcp-test/risk-server
+      defaultClientScopes:
+      - openid
+      enabled: true
+      name: Risk Server Resource
+      protocol: openid-connect
+      publicClient: false
+      serviceAccountsEnabled: false
+    - clientId: gitea
+      enabled: true
+      name: Gitea OIDC Client
+      protocol: openid-connect
+      publicClient: false
+      standardFlowEnabled: true
+      directAccessGrantsEnabled: false
+      serviceAccountsEnabled: false
+      secret: gitea-keycloak-secret
+      defaultClientScopes:
+      - openid
+      - profile
+      - email
+      redirectUris:
+      - https://gitea-gitea.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com/user/oauth2/keycloak/callback
+      webOrigins:
+      - '*'
+    defaultGroups:
+    - mcp-users
+    duplicateEmailsAllowed: false
+    editUsernameAllowed: false
+    enabled: true
+    groups:
+    - name: accounting
+      subGroups: []
+    - name: engineering
+      subGroups: []
+    - name: mcp-users
+      subGroups: []
+    id: mcp
+    loginWithEmailAllowed: true
+    realm: mcp
+    registrationAllowed: false
+    resetPasswordAllowed: false
+    roles:
+      realm:
+      - description: Basic MCP user role
+        name: mcp-user
+    sslRequired: none
+    users:
+    - clientRoles:
+        mcp-test/gitea-mcp-server:
+        - tool:actions_config_read
+        - tool:actions_config_write
+        - tool:actions_run_read
+        - tool:actions_run_write
+        - tool:attachment_read
+        - tool:create_branch
+        - tool:create_or_update_file
+        - tool:create_release
+        - tool:create_repo
+        - tool:create_tag
+        - tool:delete_branch
+        - tool:delete_file
+        - tool:delete_release
+        - tool:delete_tag
+        - tool:fork_repo
+        - tool:get_commit
+        - tool:get_dir_contents
+        - tool:get_file_contents
+        - tool:get_gitea_mcp_server_version
+        - tool:get_latest_release
+        - tool:get_me
+        - tool:get_release
+        - tool:get_repository_tree
+        - tool:get_tag
+        - tool:get_user_orgs
+        - tool:issue_read
+        - tool:issue_write
+        - tool:label_read
+        - tool:label_write
+        - tool:list_branches
+        - tool:list_commits
+        - tool:list_issues
+        - tool:list_my_repos
+        - tool:list_org_repos
+        - tool:list_pull_requests
+        - tool:list_releases
+        - tool:list_tags
+        - tool:milestone_read
+        - tool:milestone_write
+        - tool:notification_read
+        - tool:notification_write
+        - tool:package_read
+        - tool:package_write
+        - tool:pull_request_read
+        - tool:pull_request_review_write
+        - tool:pull_request_write
+        - tool:search_issues
+        - tool:search_org_teams
+        - tool:search_repos
+        - tool:search_users
+        - tool:timetracking_read
+        - tool:timetracking_write
+        - tool:wiki_read
+        - tool:wiki_write
+        mcp-test/risk-server:
+        - tool:calculate_dti
+        - tool:calculate_ltv
+        - tool:evaluate_credit_risk
+        - tool:assess_income_stability
+        - tool:assess_asset_sufficiency
+        - tool:generate_risk_recommendation
+        mcp-test/test-server1:
+        - tool:greet
+        - tool:headers
+        - tool:time
+        - tool:slow
+        - tool:add_tool
+      credentials:
+      - temporary: false
+        type: password
+        value: mcp
+      email: mcp@test.com
+      emailVerified: true
+      enabled: true
+      firstName: mcp
+      groups:
+      - accounting
+      - engineering
+      - mcp-users
+      lastName: user
+      realmRoles:
+      - mcp-user
+      username: mcp
+    - clientRoles:
+        mcp-test/test-server1:
+        - tool:greet
+      credentials:
+      - temporary: false
+        type: password
+        value: restricted
+      email: restricted@test.com
+      emailVerified: true
+      enabled: true
+      firstName: restricted
+      groups:
+      - mcp-users
+      lastName: user
+      realmRoles:
+      - mcp-user
+      username: restricted
+    - clientRoles:
+        mcp-test/gitea-mcp-server:
+        - tool:actions_config_read
+        - tool:actions_config_write
+        - tool:actions_run_read
+        - tool:actions_run_write
+        - tool:attachment_read
+        - tool:create_branch
+        - tool:create_or_update_file
+        - tool:create_release
+        - tool:create_repo
+        - tool:create_tag
+        - tool:delete_branch
+        - tool:delete_file
+        - tool:delete_release
+        - tool:delete_tag
+        - tool:fork_repo
+        - tool:get_commit
+        - tool:get_dir_contents
+        - tool:get_file_contents
+        - tool:get_gitea_mcp_server_version
+        - tool:get_latest_release
+        - tool:get_me
+        - tool:get_release
+        - tool:get_repository_tree
+        - tool:get_tag
+        - tool:get_user_orgs
+        - tool:issue_read
+        - tool:issue_write
+        - tool:label_read
+        - tool:label_write
+        - tool:list_branches
+        - tool:list_commits
+        - tool:list_issues
+        - tool:list_my_repos
+        - tool:list_org_repos
+        - tool:list_pull_requests
+        - tool:list_releases
+        - tool:list_tags
+        - tool:milestone_read
+        - tool:milestone_write
+        - tool:notification_read
+        - tool:notification_write
+        - tool:package_read
+        - tool:package_write
+        - tool:pull_request_read
+        - tool:pull_request_review_write
+        - tool:pull_request_write
+        - tool:search_issues
+        - tool:search_org_teams
+        - tool:search_repos
+        - tool:search_users
+        - tool:timetracking_read
+        - tool:timetracking_write
+        - tool:wiki_read
+        - tool:wiki_write
+        mcp-test/risk-server:
+        - tool:calculate_dti
+        - tool:calculate_ltv
+        - tool:evaluate_credit_risk
+        - tool:assess_income_stability
+        - tool:assess_asset_sufficiency
+        - tool:generate_risk_recommendation
+        mcp-test/test-server1:
+        - tool:greet
+        - tool:headers
+        - tool:time
+        - tool:slow
+        - tool:add_tool
+      credentials:
+      - temporary: false
+        type: password
+        value: user1
+      email: user1@test.com
+      emailVerified: true
+      enabled: true
+      firstName: User
+      groups:
+      - mcp-users
+      lastName: One
+      realmRoles:
+      - mcp-user
+      username: user1
+    - clientRoles:
+        mcp-test/gitea-mcp-server:
+        - tool:actions_config_read
+        - tool:actions_config_write
+        - tool:actions_run_read
+        - tool:actions_run_write
+        - tool:attachment_read
+        - tool:create_branch
+        - tool:create_or_update_file
+        - tool:create_release
+        - tool:create_repo
+        - tool:create_tag
+        - tool:delete_branch
+        - tool:delete_file
+        - tool:delete_release
+        - tool:delete_tag
+        - tool:fork_repo
+        - tool:get_commit
+        - tool:get_dir_contents
+        - tool:get_file_contents
+        - tool:get_gitea_mcp_server_version
+        - tool:get_latest_release
+        - tool:get_me
+        - tool:get_release
+        - tool:get_repository_tree
+        - tool:get_tag
+        - tool:get_user_orgs
+        - tool:issue_read
+        - tool:issue_write
+        - tool:label_read
+        - tool:label_write
+        - tool:list_branches
+        - tool:list_commits
+        - tool:list_issues
+        - tool:list_my_repos
+        - tool:list_org_repos
+        - tool:list_pull_requests
+        - tool:list_releases
+        - tool:list_tags
+        - tool:milestone_read
+        - tool:milestone_write
+        - tool:notification_read
+        - tool:notification_write
+        - tool:package_read
+        - tool:package_write
+        - tool:pull_request_read
+        - tool:pull_request_review_write
+        - tool:pull_request_write
+        - tool:search_issues
+        - tool:search_org_teams
+        - tool:search_repos
+        - tool:search_users
+        - tool:timetracking_read
+        - tool:timetracking_write
+        - tool:wiki_read
+        - tool:wiki_write
+        mcp-test/risk-server:
+        - tool:calculate_dti
+        - tool:calculate_ltv
+        - tool:evaluate_credit_risk
+        - tool:assess_income_stability
+        - tool:assess_asset_sufficiency
+        - tool:generate_risk_recommendation
+        mcp-test/test-server1:
+        - tool:greet
+        - tool:headers
+        - tool:time
+        - tool:slow
+        - tool:add_tool
+        realm-management:
+        - manage-users
+      enabled: true
+      serviceAccountClientId: mcp-gateway
+      username: service-account-mcp-gateway
+    accessTokenLifespan: 1800
