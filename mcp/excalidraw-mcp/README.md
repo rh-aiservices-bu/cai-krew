@@ -145,7 +145,12 @@ mcp_servers:
     timeout: 120
 ```
 
-Hermes uses a `client_credentials` OAuth grant against the Keycloak token endpoint. A CronJob refreshes the token every 20 minutes (before expiry). The service account user used by this CronJob must have the excalidraw tool roles assigned (see [Keycloak Client Roles](#keycloak-client-roles)).
+Configuration notes:
+
+- **`timeout: 120`** - MCP tool call timeout in seconds. Excalidraw tools like `create_view` and `export_to_excalidraw` can take 10-30s depending on diagram complexity. The 120s value gives enough headroom. If tool calls time out, the router may still be creating a session with the upstream server (first call after a reconnect is slower).
+- **`keepalive_interval: 60`** - Sends a ping every 60s to keep the MCP session alive. Without this, the Streamable HTTP connection can be closed by intermediate proxies (envoy idle timeout, OpenShift route timeout). The MCP SDK v1.26.0 has a known issue where the GET SSE stream disconnects after ~5 min, triggering a `TaskGroup` crash and reconnection cycle. The keepalive helps but does not fully prevent this.
+- **Token refresh**: Hermes uses a `client_credentials` OAuth grant against the Keycloak token endpoint. A CronJob refreshes the token every 20 minutes (before expiry). The MCP SDK will log `Token refresh failed: 400` warnings because it tries `refresh_token` grant on `client_credentials` tokens (which have no refresh token) - this is a warning, not an error. The CronJob handles the actual refresh.
+- The service account user used by the CronJob must have the excalidraw tool roles assigned (see [Keycloak Client Roles](#keycloak-client-roles)).
 
 ## How It Works
 
