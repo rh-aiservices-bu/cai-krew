@@ -15,6 +15,13 @@ WORKDIR /opt/app-root/app
 RUN sed -i 's|return this.createJsonErrorResponse(406, -32000, "Not Acceptable: Client must accept both application/json and text/event-stream");|/* patched: accept header check disabled */|g' dist/index.js && \
     sed -i 's|return this.createJsonErrorResponse(406, -32000, "Not Acceptable: Client must accept text/event-stream");|/* patched: accept header check disabled */|g' dist/index.js
 
+# Patch export_to_excalidraw to convert raw shorthand elements to full Excalidraw scene JSON.
+# The browser widget normally does this via convertToExcalidrawElements() + serializeAsJSON(),
+# but LLM clients (Hermes via MCP Gateway) call the tool directly without the widget,
+# passing raw checkpoint data that produces blank diagrams on excalidraw.com.
+COPY patch-export-convert.mjs /opt/app-root/app/
+RUN node patch-export-convert.mjs && rm patch-export-convert.mjs
+
 EXPOSE 8080
 
 ENV PORT=8080

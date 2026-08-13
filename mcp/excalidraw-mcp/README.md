@@ -54,17 +54,19 @@ Role names must match the tool names exactly. The gateway adds the `excalidraw_`
 
 ## Container Image
 
-Built from `registry.access.redhat.com/ubi9/nodejs-20`. The Containerfile clones the upstream repo, builds with pnpm, and patches the MCP SDK's Accept header validation.
+Built from `registry.access.redhat.com/ubi9/nodejs-20`. The Containerfile clones the upstream repo, builds with pnpm, and applies two patches to `dist/index.js`:
 
-The patch is needed because the MCP SDK validates that incoming requests include `Accept: application/json, text/event-stream`, but the MCP Gateway router does not send this header. Without the patch, the server returns 406 Not Acceptable.
+1. **Accept header patch** (sed) - The MCP SDK validates that incoming requests include `Accept: application/json, text/event-stream`, but the MCP Gateway router does not send this header. Without the patch, the server returns 406 Not Acceptable.
 
-Current image: `quay.io/rcarrata/excalidraw-mcp-server:v4`
+2. **Export element conversion patch** (`patch-export-convert.mjs`) - The `export_to_excalidraw` tool expects full Excalidraw scene JSON (produced by `serializeAsJSON()` in the browser widget). When LLM clients like Hermes call the tool directly through the MCP Gateway, they pass raw shorthand elements from the checkpoint - just a bare array like `[{type: "rectangle", x: 100, label: "foo"}]`. Excalidraw.com can't render that because it expects `{type: "excalidraw", version: 2, elements: [...full elements...]}` with all required properties (`strokeColor`, `seed`, `roughness`, etc.). The browser widget normally does this conversion client-side via `convertToExcalidrawElements()` + `serializeAsJSON()` from `@excalidraw/excalidraw`, but that library requires React/DOM and can't run in Node.js. This patch adds a lightweight server-side conversion that detects raw input, adds default Excalidraw properties, converts `label` to bound text elements, and wraps everything in a valid scene JSON structure.
+
+Current image: `quay.io/rcarrata/excalidraw-mcp-server:v5`
 
 To rebuild:
 
 ```bash
-podman build -t quay.io/<your-user>/excalidraw-mcp-server:v4 .
-podman push quay.io/<your-user>/excalidraw-mcp-server:v4
+podman build -t quay.io/<your-user>/excalidraw-mcp-server:v5 .
+podman push quay.io/<your-user>/excalidraw-mcp-server:v5
 ```
 
 Update the image reference in `excalidraw-mcp-server/deployment.yaml` if using a different registry.

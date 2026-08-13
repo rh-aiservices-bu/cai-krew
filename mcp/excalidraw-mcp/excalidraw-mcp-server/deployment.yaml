@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: excalidraw-mcp-server
-          image: quay.io/rcarrata/excalidraw-mcp-server:v4
+          image: quay.io/rcarrata/excalidraw-mcp-server:v5
           ports:
             - name: http
               containerPort: 8080
