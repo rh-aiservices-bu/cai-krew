@@ -1,0 +1,4 @@
+apiVersion: v2
+name: auth-ui
+version: 0.1.0
+description: MCP Auth UI — PKCE linking flow for per-user Keycloak tokens

@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-ui
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: auth-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-ui
+  template:
+    metadata:
+      labels:
+        app: auth-ui
+    spec:
+      # Co-locate with Hermes so we can mount the same RWO PVC (gp3-csi/EBS
+      # allows multiple pods on the same node to share a RWO volume).
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: hermes-agent
+            topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: auth-ui
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - secretRef:
+            name: auth-ui-config
+        volumeMounts:
+        - name: hermes-pvc
+          mountPath: /app/.hermes
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: hermes-pvc
+        persistentVolumeClaim:
+          claimName: {{ .Values.pvcName }}

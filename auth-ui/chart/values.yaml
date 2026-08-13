@@ -1,0 +1,40 @@
+## Namespace and image
+namespace: cai-crew
+image:
+  repository: "quay.io/rlundber/hermes-auth-app"
+  tag: "0.7"
+  pullPolicy: Always
+
+## Keycloak config — realm `mcp` on the MCP cluster (cluster-86gng)
+keycloak:
+  base: "https://sso.apps.cluster-.io/realms/mcp"
+  clientId: "mcp-gateway"
+  clientSecret: "mcp"
+
+## Public URL of this app's /callback endpoint
+## Must be added as a valid redirect URI on the mcp-gateway Keycloak client.
+redirectUri: "https://auth-ui.apps.cluster-.opentlc.com/callback"
+
+## Path on the shared PVC where Hermes stores tokens
+hermesHome: "/app/.hermes"
+
+## Gitea URL — shown in dashboard as a quick-access link
+giteaUrl: "https://gitea-gitea.apps.cluster-.opentlc.com"
+
+## Slack workspace URL — shown in dashboard as a quick-access link
+slackUrl: ""
+
+## PVC to mount — same PVC as the Hermes agent pod (hermes-agent-data)
+pvcName: "hermes-data"
+
+## Route hostname (OpenShift Route) — Hermes cluster (cluster-9shz5)
+routeHost: "auth-ui.apps.cluster-.opentlc.com"
+
+## Resources
+resources:
+  requests:
+    cpu: "50m"
+    memory: "128Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"

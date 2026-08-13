@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-ui
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: auth-ui
+spec:
+  selector:
+    app: auth-ui
+  ports:
+  - port: 8080
+    targetPort: 8080
