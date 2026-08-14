@@ -20,7 +20,7 @@ WORKDIR /build/hermes-agent
 # Create virtual environment and install Hermes
 RUN python -m venv /opt/hermes/venv
 ENV PATH="/opt/hermes/venv/bin:$PATH"
-RUN pip install --no-cache-dir ".[slack]"
+RUN pip install --no-cache-dir ".[slack]" ".[mcp]"
 
 # Install common Python deps used by Hermes tools
 RUN pip install --no-cache-dir \
@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir \
     opentelemetry-api \
     opentelemetry-sdk \
     opentelemetry-exporter-otlp-proto-http \
+    ddgs \
     \
     && rm -rf ~/.cache/pip
 
