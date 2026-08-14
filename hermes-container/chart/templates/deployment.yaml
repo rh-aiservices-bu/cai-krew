@@ -28,6 +28,9 @@ spec:
               set -e
               rm -rf /data/plugins
               mkdir -p /data/{skills,sessions,logs,memories,cache/models,mem0,plugins}
+              # Shared token directory — auth-ui writes here, Hermes reads it.
+              # Must be world-writable because auth-ui runs as a different UID on the same RWO PVC.
+              mkdir -p /data/user-tokens && chmod 777 /data/user-tokens
               # Clone all plugins (always pull latest)
               git clone --depth 1 https://github.com/rh-aiservices-bu/cai-krew.git /tmp/cai-krew
               cp -r /tmp/cai-krew/hermes-plugins/* /data/plugins/
