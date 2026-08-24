@@ -16,6 +16,10 @@ import os
 import sys
 from pathlib import Path
 
+# Skip memory collection for projects that opt out
+if Path(".mem0_ignore").exists():
+    sys.exit(0)
+
 # mem0_client lives one directory up from this plugin folder
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

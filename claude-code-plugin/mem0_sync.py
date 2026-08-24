@@ -18,6 +18,10 @@ import sys
 import time
 from pathlib import Path
 
+# Skip memory collection for projects that opt out
+if Path(".mem0_ignore").exists():
+    sys.exit(0)
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 QUEUE_DIR = Path.home() / ".claude" / "mem0_queue"
