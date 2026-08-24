@@ -1,0 +1,220 @@
+{{- if .Values.tokenRefresher.enabled }}
+---
+# Secret: Keycloak client credentials for the token refresher.
+# Kept separate from the main hermes-agent-secrets so credentials
+# can be rotated independently.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.agent.name }}-token-refresher
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+type: Opaque
+stringData:
+  keycloak-token-url: {{ .Values.tokenRefresher.keycloakTokenUrl | quote }}
+  client-id: {{ .Values.tokenRefresher.clientId | quote }}
+  client-secret: {{ .Values.tokenRefresher.clientSecret | quote }}
+---
+# ServiceAccount used by the CronJob pods.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.agent.name }}-token-refresher
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+---
+# Role: minimal permissions to find the Hermes pod and exec into it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.agent.name }}-token-refresher
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.agent.name }}-token-refresher
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.agent.name }}-token-refresher
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.agent.name }}-token-refresher
+  namespace: {{ .Values.agent.namespace }}
+---
+# ConfigMap: shell script run by the CronJob.
+#
+# Strategy: use `oc exec -i` to run a Python one-shot script inside the
+# already-running Hermes pod.  This avoids any PVC access issues (the PVC
+# is ReadWriteOnce and already mounted by Hermes) while reusing the Python
+# stdlib already present in the Hermes image.
+#
+# The heredoc (unquoted <<EOF) lets the shell inject the credentials from
+# the mounted Secret before the script is piped into the remote python3
+# process.  No credentials are written to disk on the CronJob container.
+#
+# Hermes picks up the refreshed token automatically via its built-in
+# disk-watch (MCPOAuthManager.invalidate_if_disk_changed), so no restart
+# is needed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.agent.name }}-token-refresher-script
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+data:
+  refresh.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    NAMESPACE="{{ .Values.agent.namespace }}"
+    AGENT_NAME="{{ .Values.agent.name }}"
+    SERVER_NAME="{{ .Values.tokenRefresher.mcpServerName }}"
+
+    # Read credentials from the mounted Secret volume.
+    KEYCLOAK_TOKEN_URL=$(cat /credentials/keycloak-token-url)
+    CLIENT_ID=$(cat /credentials/client-id)
+    CLIENT_SECRET=$(cat /credentials/client-secret)
+
+    # Find the running Hermes pod by its app label.
+    HERMES_POD=$(oc get pod \
+      -n "$NAMESPACE" \
+      -l "app=$AGENT_NAME" \
+      --field-selector=status.phase=Running \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    if [ -z "$HERMES_POD" ]; then
+      echo "ERROR: No running Hermes pod found (app=$AGENT_NAME in $NAMESPACE)"
+      exit 1
+    fi
+
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Refreshing MCP token on pod: $HERMES_POD (server=$SERVER_NAME)"
+
+    # Run the Python script inside the Hermes container.
+    # The unquoted heredoc allows shell to expand CLIENT_ID, CLIENT_SECRET,
+    # KEYCLOAK_TOKEN_URL, and SERVER_NAME into the Python source.
+    oc exec -i -n "$NAMESPACE" "$HERMES_POD" -c hermes-agent -- python3 - <<EOF
+import urllib.request, urllib.parse, json, time, os, stat, ssl, sys
+
+keycloak_url  = "${KEYCLOAK_TOKEN_URL}"
+client_id     = "${CLIENT_ID}"
+client_secret = "${CLIENT_SECRET}"
+server_name   = "${SERVER_NAME}"
+
+# Request a token via OAuth 2.0 client_credentials grant.
+data = urllib.parse.urlencode({
+    "grant_type":    "client_credentials",
+    "client_id":     client_id,
+    "client_secret": client_secret,
+}).encode()
+
+# Disable certificate verification for internal/self-signed cluster CAs.
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+req = urllib.request.Request(keycloak_url, data=data, method="POST")
+try:
+    with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+        resp = json.loads(r.read())
+except Exception as exc:
+    print(f"ERROR: Keycloak request failed: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if "access_token" not in resp:
+    print(f"ERROR: Unexpected Keycloak response: {resp}", file=sys.stderr)
+    sys.exit(1)
+
+expires_in = resp.get("expires_in", 3600)
+token_data = {
+    "access_token": resp["access_token"],
+    "token_type":   resp.get("token_type", "bearer"),
+    "expires_in":   expires_in,
+    # Absolute wall-clock expiry — mirrors HermesTokenStorage.set_tokens()
+    # so the MCP SDK's is_token_valid() computes the correct remaining TTL.
+    "expires_at":   time.time() + expires_in,
+}
+
+hermes_home = os.environ.get("HERMES_HOME", "/app/.hermes")
+token_dir   = os.path.join(hermes_home, "mcp-tokens")
+os.makedirs(token_dir, mode=0o700, exist_ok=True)
+token_path  = os.path.join(token_dir, f"{server_name}.json")
+
+# Atomic write: open O_EXCL tmp -> write -> os.replace (rename).
+# Mirrors _write_json() in mcp_oauth.py so file modes stay 0o600.
+tmp = token_path + ".tmp"
+fd  = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(token_data, f, indent=2)
+except Exception:
+    try: os.unlink(tmp)
+    except OSError: pass
+    raise
+os.replace(tmp, token_path)
+print(f"Token written to {token_path} — expires_in={expires_in}s ({expires_in // 60}min)")
+EOF
+
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Done."
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.agent.name }}-token-refresher
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}
+spec:
+  # Default: every 20 min. Well within the accessTokenLifespan (3600s = 1h).
+  schedule: {{ .Values.tokenRefresher.schedule | quote }}
+  concurrencyPolicy: Forbid          # skip if previous job is still running
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 120     # give up after 2 min
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: {{ .Values.agent.name }}-token-refresher
+        spec:
+          serviceAccountName: {{ .Values.agent.name }}-token-refresher
+          restartPolicy: OnFailure
+          containers:
+          - name: refresher
+            image: {{ .Values.tokenRefresher.image | quote }}
+            imagePullPolicy: Always
+            command: ["/bin/bash", "/scripts/refresh.sh"]
+            volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: credentials
+              mountPath: /credentials
+              readOnly: true
+          volumes:
+          - name: scripts
+            configMap:
+              name: {{ .Values.agent.name }}-token-refresher-script
+              defaultMode: 0755
+          - name: credentials
+            secret:
+              secretName: {{ .Values.agent.name }}-token-refresher
+{{- end }}
