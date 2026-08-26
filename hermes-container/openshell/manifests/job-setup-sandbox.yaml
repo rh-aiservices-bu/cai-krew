@@ -194,6 +194,75 @@ spec:
               openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
                   "echo 'plugins installed:' && ls /sandbox/.hermes/plugins/"
 
+              # Install hermes_otel plugin (download in job container, upload via base64 chunks — sandbox has no GitHub access)
+              # openshell sandbox exec has a 32768-byte argument limit, so individual large files must be
+              # split into chunks and reassembled in the sandbox rather than uploaded in a single command.
+              if [ -n "${MLFLOW_TRACKING_URI:-}" ]; then
+                  step "Install hermes_otel plugin (MLflow tracing)"
+                  curl -fsSL https://github.com/briancaffey/hermes-otel/archive/refs/heads/main.tar.gz \
+                      -o /tmp/hermes-otel.tar.gz 2>&1 || \
+                      { echo "WARN: hermes-otel download failed, tracing disabled"; }
+                  if [ -f /tmp/hermes-otel.tar.gz ]; then
+                      # Re-pack stripping the top-level GitHub directory name
+                      mkdir -p /tmp/hermes-otel-src
+                      tar -xzf /tmp/hermes-otel.tar.gz -C /tmp/hermes-otel-src --strip-components=1
+                      rm /tmp/hermes-otel.tar.gz
+                      tar -czf /tmp/ho.tar.gz -C /tmp/hermes-otel-src .
+                      rm -rf /tmp/hermes-otel-src
+                      # Base64-encode and split into 20 KB chunks (well under the 32768-byte limit)
+                      base64 -w0 /tmp/ho.tar.gz > /tmp/ho.b64
+                      rm /tmp/ho.tar.gz
+                      split -b 20000 /tmp/ho.b64 /tmp/ho_chunk_
+                      rm /tmp/ho.b64
+                      # Upload chunks to sandbox, appending to reassemble the base64 stream
+                      openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                          "rm -f /tmp/ho.b64"
+                      FIRST=1
+                      for CHUNK_FILE in /tmp/ho_chunk_*; do
+                          CHUNK=$(cat "$CHUNK_FILE")
+                          if [ "$FIRST" = "1" ]; then
+                              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                                  "printf '%s' '${CHUNK}' > /tmp/ho.b64"
+                              FIRST=0
+                          else
+                              openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                                  "printf '%s' '${CHUNK}' >> /tmp/ho.b64"
+                          fi
+                      done
+                      rm /tmp/ho_chunk_*
+                      # Decode and extract into the plugin directory
+                      openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                          "mkdir -p /sandbox/.hermes/plugins/hermes_otel && base64 -d /tmp/ho.b64 | tar -xzf - -C /sandbox/.hermes/plugins/hermes_otel && rm /tmp/ho.b64 && echo 'hermes_otel files uploaded'"
+                      openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                          "HERMES_HOME=/sandbox/.hermes hermes plugins enable hermes_otel && echo 'hermes_otel enabled'"
+                  fi
+              fi
+
+              # Write hermes_otel config for MLflow tracing
+              if [ -n "${MLFLOW_TRACKING_URI:-}" ]; then
+                  step "Configure hermes_otel (MLflow)"
+                  # Create a long-lived SA token — openshell-installer is bound to mlflow-operator-mlflow-integration
+                  MLFLOW_TOKEN=$(oc create token openshell-installer --duration=8760h 2>/dev/null || oc whoami -t 2>/dev/null || true)
+                  # Look up experiment ID by name
+                  _EXP_NAME="${MLFLOW_EXPERIMENT_NAME:-hermes-sandbox}"
+                  MLFLOW_EXPERIMENT_ID=$(curl -sk \
+                      -H "Authorization: Bearer ${MLFLOW_TOKEN}" \
+                      -H "X-MLflow-Workspace: ${MLFLOW_WORKSPACE:-cai-crew}" \
+                      "${MLFLOW_TRACKING_URI%/}/api/2.0/mlflow/experiments/search?max_results=50" \
+                      | python3 -c "import sys,json; d=json.load(sys.stdin); exps=d.get('experiments',[]); m=[e for e in exps if e['name']=='${_EXP_NAME}']; print(m[0]['experiment_id'] if m else '1')" \
+                      2>/dev/null || echo "1")
+                  info "MLflow experiment '${MLFLOW_EXPERIMENT_NAME}' => ID ${MLFLOW_EXPERIMENT_ID}"
+                  sed \
+                      -e "s|__MLFLOW_URI__|${MLFLOW_TRACKING_URI%/}|g" \
+                      -e "s|__MLFLOW_EXPERIMENT_ID__|${MLFLOW_EXPERIMENT_ID}|g" \
+                      -e "s|__MLFLOW_WORKSPACE__|${MLFLOW_WORKSPACE:-cai-crew}|g" \
+                      -e "s|__SA_TOKEN__|${MLFLOW_TOKEN}|g" \
+                      /scripts/hermes-otel-config.yaml.template > /tmp/hermes-otel-config.yaml
+                  OTEL_B64=$(base64 -w0 /tmp/hermes-otel-config.yaml)
+                  openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \
+                      "mkdir -p /sandbox/.hermes/plugins/hermes_otel && printf '%s' '${OTEL_B64}' | base64 -d > /sandbox/.hermes/plugins/hermes_otel/config.yaml && echo 'hermes_otel config written'"
+              fi
+
               # Start Hermes as a persistent background process
               step "Start Hermes"
               openshell sandbox exec --name "$SANDBOX_NAME" -- /bin/sh -c \

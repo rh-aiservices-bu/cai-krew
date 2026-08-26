@@ -18,4 +18,20 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openshell-installer
-    namespace: PLACEHOLDER_NAMESPACE  # replaced by the namespace where Jobs run
+    namespace: cai-crew  # replaced by the namespace where Jobs run
+---
+# Grants openshell-installer SA access to RHOAI MLflow (required for hermes_otel tracing).
+# The mlflow-operator-mlflow-integration ClusterRole is created by the RHOAI MLflow operator.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openshell-installer-mlflow
+  namespace: cai-crew  # replaced by the namespace where Jobs run
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow-operator-mlflow-integration
+subjects:
+  - kind: ServiceAccount
+    name: openshell-installer
+    namespace: cai-crew  # replaced by the namespace where Jobs run

@@ -1,0 +1,102 @@
+{{- if .Values.ui.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.agent.name }}-ui
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.agent.name }}-ui
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.agent.name }}-ui
+    spec:
+      # Co-locate with the Hermes agent so the RWO PVC can be shared
+      # (gp3-csi allows multiple pods on the same node to mount the same RWO volume).
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: {{ .Values.agent.name }}
+            topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: hermes-ui
+        image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag }}"
+        imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
+        ports:
+        - containerPort: 9119
+        env:
+          {{- range $key, $val := .Values.env }}
+          - name: {{ $key }}
+            value: {{ $val | quote }}
+          {{- end }}
+        volumeMounts:
+        - name: hermes-data
+          mountPath: /app/.hermes
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /api/status
+            port: 9119
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /api/status
+            port: 9119
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: hermes-data
+        persistentVolumeClaim:
+          claimName: {{ .Values.agent.name }}-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.agent.name }}-ui
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}-ui
+spec:
+  selector:
+    app: {{ .Values.agent.name }}-ui
+  ports:
+  - name: http
+    port: 9119
+    targetPort: 9119
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Values.agent.name }}-ui
+  namespace: {{ .Values.agent.namespace }}
+  labels:
+    app: {{ .Values.agent.name }}-ui
+spec:
+  host: {{ .Values.ui.routeHost }}
+  to:
+    kind: Service
+    name: {{ .Values.agent.name }}-ui
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}

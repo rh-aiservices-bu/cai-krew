@@ -1,0 +1,106 @@
+# Hermes Web UI — three-stage build
+# Stage 1: node binary source (Node 22 LTS)
+# Stage 2: build web dist + TUI bundle with npm, then install the Python venv
+# Stage 3: slim runtime with venv + node binary + prebuilt TUI bundle
+
+FROM node:22-bookworm-slim AS node_source
+
+FROM registry.access.redhat.com/ubi9/python-312:latest AS builder
+
+USER root
+RUN dnf install -y gcc git nodejs npm && dnf clean all
+
+WORKDIR /build
+RUN git clone --depth 1 https://github.com/RHRolun/hermes-agent.git hermes-agent
+
+WORKDIR /build/hermes-agent
+
+# Build the web UI.
+# vite.config.ts sets outDir: "../hermes_cli/web_dist" so the output lands
+# inside the Python package tree, where pip picks it up as package data.
+RUN npm install --workspace web && npm run build -w web
+
+# Build the TUI bundle (produces ui-tui/dist/entry.js).
+# Required for the dashboard Chat tab — the runtime spawns:
+#   node --expose-gc $HERMES_TUI_DIR/dist/entry.js
+RUN npm install --workspace ui-tui && npm run build -w ui-tui
+
+# Install Python venv — web_dist is now populated so it gets included
+RUN python -m venv /opt/hermes/venv
+ENV PATH="/opt/hermes/venv/bin:$PATH"
+RUN pip install --no-cache-dir ".[slack]" ".[mcp]" && rm -rf ~/.cache/pip
+
+# Patch: redirect password-only providers (basic auth) from the broken
+# GET /auth/login OAuth flow to the server-rendered /login page instead.
+RUN python3 - <<'EOF'
+import pathlib, re
+
+p = pathlib.Path("/opt/hermes/venv/lib/python3.12/site-packages/hermes_cli/dashboard_auth/routes.py")
+src = p.read_text()
+
+old = (
+    "    except ProviderError as e:\n"
+    "        audit_log(\n"
+    "            AuditEvent.LOGIN_FAILURE,\n"
+    "            provider=provider,\n"
+    "            reason=\"provider_unreachable\",\n"
+    "            ip=_client_ip(request),\n"
+    "        )\n"
+    "        raise HTTPException(\n"
+    "            status_code=503,\n"
+    "            detail=f\"Provider unreachable: {e}\",\n"
+    "        )"
+)
+new = old + (
+    "\n"
+    "    except NotImplementedError:\n"
+    "        # Password-only providers (basic auth) have no OAuth redirect.\n"
+    "        # Send the browser to the server-rendered login page instead.\n"
+    "        _next = f\"?next={next}\" if next else \"\"\n"
+    "        from fastapi.responses import RedirectResponse as _RR\n"
+    "        return _RR(f\"/login{_next}\", status_code=302)"
+)
+
+assert old in src, "Patch anchor not found — routes.py may have changed upstream"
+p.write_text(src.replace(old, new, 1))
+print("routes.py patched OK")
+EOF
+
+# =====================================================================
+# Runtime stage — Python venv + node binary + prebuilt TUI bundle
+# =====================================================================
+FROM registry.access.redhat.com/ubi9/python-312:latest
+
+USER root
+RUN dnf install -y git && dnf clean all \
+    && curl -Lo /usr/local/bin/tini https://github.com/krallin/tini/releases/download/v0.19.0/tini-amd64 \
+    && chmod +x /usr/local/bin/tini
+
+# Node 22 LTS binary — needed by the dashboard Chat tab to run the TUI bundle
+COPY --from=node_source /usr/local/bin/node /usr/local/bin/node
+
+WORKDIR /app
+
+COPY --from=builder /opt/hermes/venv /opt/hermes/venv
+
+# TUI bundle (ui-tui/dist/entry.js built in builder stage).
+# HERMES_TUI_DIR tells _make_tui_argv to use the prebuilt bundle directly,
+# skipping the npm install / esbuild path entirely.
+COPY --from=builder /build/hermes-agent/ui-tui/dist /opt/hermes/tui/dist
+
+ENV PATH="/opt/hermes/venv/bin:$PATH"
+ENV HERMES_HOME=/app/.hermes
+ENV HOME=/app
+ENV HERMES_TUI_DIR=/opt/hermes/tui
+
+RUN mkdir -p /app/.hermes
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:9119/api/status || exit 1
+
+EXPOSE 9119
+
+USER 1001
+
+ENTRYPOINT ["/usr/local/bin/tini", "--"]
+CMD ["hermes", "serve", "--host", "0.0.0.0", "--port", "9119", "--skip-build"]

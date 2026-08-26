@@ -276,6 +276,22 @@ data:
     - Overexplaining things the team already knows
     - Verbose multi-paragraph responses when a sentence will do
 
+  hermes-otel-config.yaml.template: |
+    enabled: true
+    force_flush_on_session_end: true
+    capture_sender_id: true
+    capture_conversation_history: true
+    backends:
+      - type: otlp
+        name: mlflow
+        endpoint: __MLFLOW_URI__/v1/traces
+        metrics: false
+        logs: false
+        headers:
+          x-mlflow-experiment-id: "__MLFLOW_EXPERIMENT_ID__"
+          Authorization: "Bearer __SA_TOKEN__"
+          X-MLflow-Workspace: "__MLFLOW_WORKSPACE__"
+
   policy-standard.yaml.template: |
     # Standard sandbox policy for Hermes agent.
     # Allows inference (LiteLLM + OpenRouter), PyPI (skill installs), GitHub (read-only),
@@ -490,7 +506,7 @@ data:
       sdxl_predictor:
         name: "SDXL Image Generation"
         endpoints:
-          - host: "sdxl-route-cai-crew.apps.cluster-9shz5.9shz5.sandbox4079.opentlc.com"
+          - host: "sdxl-route-cai-crew.apps.caiprod.rhoai.rh-aiservices-bu.com"
             port: 443
             protocol: rest
             enforcement: enforce
@@ -509,6 +525,11 @@ data:
             enforcement: enforce
             access: full
           - host: "mlflow-redhat-ods-applications.__OCP_APPS_DOMAIN__"
+            port: 443
+            protocol: rest
+            enforcement: enforce
+            access: full
+          - host: "rh-ai.__OCP_APPS_DOMAIN__"
             port: 443
             protocol: rest
             enforcement: enforce
