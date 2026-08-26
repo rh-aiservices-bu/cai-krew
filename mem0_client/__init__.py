@@ -72,6 +72,7 @@ class Mem0Client:
         agent_id: str,
         run_id: str,
         extra_instructions: str = "",
+        timeout: float = TIMEOUT,
     ) -> None:
         self.url        = url.rstrip("/")
         self.user_id    = user_id.replace(" ", "_")
@@ -80,7 +81,7 @@ class Mem0Client:
         self.run_id     = run_id
         self.extra_instructions = extra_instructions
 
-        self._client       = httpx.Client(base_url=self.url, timeout=TIMEOUT)
+        self._client       = httpx.Client(base_url=self.url, timeout=timeout)
         self._write_client = httpx.Client(base_url=self.url, timeout=WRITE_TIMEOUT)
         self._cb_failures  = 0
         self._cb_tripped_at = 0.0
@@ -378,4 +379,5 @@ class Mem0Client:
             agent_id=os.getenv("MEM0_AGENT_ID") or agent_id or "assistant",
             run_id=run_id,
             extra_instructions=os.getenv("MEM0_CUSTOM_INSTRUCTIONS") or "",
+            timeout=float(os.getenv("MEM0_TIMEOUT", TIMEOUT)),
         )

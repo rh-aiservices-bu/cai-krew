@@ -22,7 +22,7 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
           - labelSelector:
               matchLabels:
-                app: hermes-agent
+                app: {{ .Values.hermesAppLabel | default "hermie" }}
             topologyKey: kubernetes.io/hostname
       securityContext:
         runAsNonRoot: true

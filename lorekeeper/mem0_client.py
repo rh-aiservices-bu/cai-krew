@@ -8,7 +8,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT = 30.0
+_LIST_TIMEOUT = 30.0   # listing all memories can be slow on large stores
+_WRITE_TIMEOUT = 10.0  # delete/update — fail fast if embedding service is stuck
 _TEAM_SCOPE = "__team__"
 
 # The server caps GET /memories (no filters) at this many rows.
@@ -18,7 +19,8 @@ _LIST_ALL_LIMIT = 1000
 
 class Mem0Client:
     def __init__(self, base_url: str) -> None:
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=_TIMEOUT)
+        self._list_client = httpx.Client(base_url=base_url.rstrip("/"), timeout=_LIST_TIMEOUT)
+        self._write_client = httpx.Client(base_url=base_url.rstrip("/"), timeout=_WRITE_TIMEOUT)
 
     def discover_actor_keys(self) -> List[str]:
         """Return every distinct personal actor key present in the memory store.
@@ -28,7 +30,7 @@ class Mem0Client:
         Actor keys are the agent_id values on personal memories — everything
         except __team__.
         """
-        r = self._client.get("/memories", params={"top_k": _LIST_ALL_LIMIT})
+        r = self._list_client.get("/memories", params={"top_k": _LIST_ALL_LIMIT})
         r.raise_for_status()
         data = r.json()
         memories = data if isinstance(data, list) else data.get("results", [])
@@ -46,7 +48,7 @@ class Mem0Client:
         agent_id = actor_key (e.g. "hermes|test-user"), so we filter by that.
         top_k must be set explicitly — the SDK default is 20.
         """
-        r = self._client.get("/memories", params={"agent_id": actor_key, "top_k": _LIST_ALL_LIMIT})
+        r = self._list_client.get("/memories", params={"agent_id": actor_key, "top_k": _LIST_ALL_LIMIT})
         r.raise_for_status()
         data = r.json()
         return data if isinstance(data, list) else data.get("results", [])
@@ -56,19 +58,21 @@ class Mem0Client:
 
         top_k must be set explicitly — the SDK default is 20.
         """
-        r = self._client.get("/memories", params={"agent_id": _TEAM_SCOPE, "top_k": _LIST_ALL_LIMIT})
+        r = self._list_client.get("/memories", params={"agent_id": _TEAM_SCOPE, "top_k": _LIST_ALL_LIMIT})
         r.raise_for_status()
         data = r.json()
         return data if isinstance(data, list) else data.get("results", [])
 
-    # ── v2 stubs ──────────────────────────────────────────────────────────────
-
     def delete_memory(self, memory_id: str) -> None:
-        raise NotImplementedError("delete not enabled in v1 (report-only mode)")
+        r = self._write_client.delete(f"/memories/{memory_id}")
+        r.raise_for_status()
 
     def update_memory(self, memory_id: str, text: str) -> Dict:
         """PUT /memories/{id} — used for MERGE: update in-place instead of delete+add."""
-        raise NotImplementedError("update not enabled in v1 (report-only mode)")
+        r = self._write_client.put(f"/memories/{memory_id}", json={"text": text})
+        r.raise_for_status()
+        return r.json()
 
     def close(self) -> None:
-        self._client.close()
+        self._list_client.close()
+        self._write_client.close()

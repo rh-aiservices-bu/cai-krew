@@ -1,0 +1,26 @@
+# Keycloak connection (can also use env vars KEYCLOAK_URL, KC_ADMIN_USER, KC_ADMIN_PASS)
+keycloak:
+  url: "https://sso.apps.somecluster"
+  realm: "mcp"
+  admin_user: ""
+  admin_password: ""   # or set KC_ADMIN_PASS env var
+
+# Gitea connection (can also use env vars GITEA_URL, GITEA_ADMIN_USER, GITEA_ADMIN_PASS)
+# Omit this section (or use --skip-gitea) to only provision Keycloak.
+gitea:
+  url: "https://gitea-gitea.somecluster"
+  admin_user: ""
+  admin_password: ""   # or set GITEA_ADMIN_PASS env var
+  auth_source_id: 1              # Gitea login_source ID for Keycloak (SELECT id FROM login_source WHERE type=6)
+
+users:
+  - username: user1
+    first_name: User
+    last_name: One
+    email: user@one.com
+    password: changeme123
+    password_temporary: true
+    slack_user_id: your-slack-id
+    gitea_roles: all
+    groups: []
+    # gitea_pat: "optional-override"   # omit to auto-generate via Gitea admin API

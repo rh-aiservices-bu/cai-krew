@@ -35,7 +35,7 @@ def _format_memories(memories: List[Dict]) -> str:
         )
         text = m.get("memory", str(m))
         mid = m.get("id", f"missing-id-{i}")
-        lines.append(f'[{i}] id="{mid}" created="{created}"\n    {text}')
+        lines.append(f'id="{mid}" created="{created}"\n    {text}')
     return "\n".join(lines)
 
 

@@ -1,3 +1,7 @@
 .venv/
 __pycache__
 values-*.yaml
+eval/*
+agent-eval-harness/*
+hermes-agent/*
+mem0/mem0/*

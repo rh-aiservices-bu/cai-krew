@@ -45,8 +45,8 @@ spec:
               # Always overwrite .env and SOUL.md from their sources
               cp /secrets/env/.env /data/.env
               cp /soul/SOUL.md /data/SOUL.md
-              # Only seed config.yaml if not already present (Hermes may write back to it at runtime)
-              [ -f /data/config.yaml ] || cp /secrets/config/config.yaml /data/config.yaml
+              # Always overwrite config.yaml from the chart secret (like .env and SOUL.md)
+              cp /secrets/config/config.yaml /data/config.yaml
           volumeMounts:
             - name: hermes-data
               mountPath: /data

@@ -2,8 +2,8 @@
 """Lorekeeper entrypoint.
 
 Reads all memories, asks an LLM to identify redundant, contradictory, or
-mergeable memories, then either posts interactive Slack messages for approval
-or prints the full report as JSON to stdout.
+mergeable memories, applies the changes immediately, then posts a report to
+Slack (or prints JSON to stdout if Slack is not configured).
 
 Required env vars:
   MEM0_URL        Base URL of the mem0 server
@@ -15,8 +15,7 @@ Optional env vars:
   MEM0_ACTOR_KEYS    Comma-separated actor keys to restrict analysis to specific
                      actors (e.g. "hermes|alice,hermes|bob"). When omitted, actor
                      keys are discovered automatically via GET /memories.
-  SLACK_BOT_TOKEN    xoxb-... token. When set, posts interactive approval
-                     messages to Slack instead of printing JSON to stdout.
+  SLACK_BOT_TOKEN    xoxb-... token. When set, posts informational results to Slack.
   SLACK_CHANNEL      Slack channel to post to (e.g. #lorekeeper).
                      Required when SLACK_BOT_TOKEN is set.
 """
@@ -82,6 +81,7 @@ def main() -> None:
         litellm_model=litellm_model,
         api_key=api_key,
         on_actions=on_actions,
+        apply=True,
     )
 
     s = report["summary"]

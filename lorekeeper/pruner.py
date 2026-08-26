@@ -1,13 +1,15 @@
-"""Core pruning logic: fetch → chunk → analyze → collect plan.
-
-v1: report-only. No changes are written to mem0.
-v2: apply plan (delete/merge) after Slack approval.
-"""
+"""Core pruning logic: fetch → chunk → analyze → apply plan."""
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional
+
+_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    re.IGNORECASE,
+)
 
 from openai import OpenAI
 
@@ -112,6 +114,83 @@ def _analyze(
     return plan
 
 
+# ── Apply ─────────────────────────────────────────────────────────────────────
+
+def _validate_ids(ids: List[str]) -> List[str]:
+    """Return only UUID-format IDs; log a warning for any that look like hallucinated indices."""
+    valid, bad = [], []
+    for mid in ids:
+        if _UUID_RE.match(mid):
+            valid.append(mid)
+        else:
+            bad.append(mid)
+    if bad:
+        logger.warning("Skipping non-UUID id(s) %s — LLM likely used batch indices instead of real IDs", bad)
+    return valid
+
+
+def _delete_tolerant(mem0: Mem0Client, mid: str) -> None:
+    """Delete a memory, silently ignoring 404 (already gone)."""
+    try:
+        mem0.delete_memory(mid)
+    except Exception as exc:
+        if "404" in str(exc):
+            logger.debug("Memory %s already deleted, skipping", mid)
+        else:
+            raise
+
+
+def _apply_actions(mem0: Mem0Client, plan: List[Dict]) -> None:
+    """Apply all actions in a plan in-place, annotating each with 'result' and 'result_text'."""
+    for action in plan:
+        verb = action.get("action", "").upper()
+        raw_ids: List[str] = action.get("ids", [])
+        ids = _validate_ids(raw_ids)
+
+        if not ids:
+            action["result"] = "skipped"
+            action["result_text"] = f"All IDs were invalid (hallucinated indices): {raw_ids}"
+            continue
+
+        try:
+            if verb == "DELETE":
+                for mid in ids:
+                    _delete_tolerant(mem0, mid)
+                action["result"] = "applied"
+                action["result_text"] = f"Deleted {len(ids)} memory(s)."
+            elif verb == "MERGE":
+                new_text = action.get("new_text", "")
+                if not new_text:
+                    raise ValueError("MERGE action has no new_text")
+                target = None
+                for mid in ids:
+                    try:
+                        mem0.update_memory(mid, new_text)
+                        target = mid
+                        break
+                    except Exception as exc:
+                        if "404" in str(exc):
+                            logger.debug("MERGE candidate %s already gone, trying next", mid)
+                            continue
+                        raise
+                if target is None:
+                    action["result"] = "skipped"
+                    action["result_text"] = "All memories in merge group already deleted."
+                    continue
+                for mid in ids:
+                    if mid != target:
+                        _delete_tolerant(mem0, mid)
+                action["result"] = "applied"
+                action["result_text"] = f"Merged {len(ids)} memories into one (target: {target})."
+            else:
+                action["result"] = "skipped"
+                action["result_text"] = f"Unknown action verb: {verb}"
+        except Exception as exc:
+            logger.error("Failed to apply %s on %s: %s", verb, ids, exc)
+            action["result"] = "failed"
+            action["result_text"] = str(exc)
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def run(
@@ -121,14 +200,17 @@ def run(
     litellm_model: str,
     api_key: str,
     on_actions: Optional[Callable[[str, List[Dict]], None]] = None,
+    apply: bool = True,
 ) -> Dict[str, Any]:
     """
-    Fetch all memories, analyze them, and return a pruning report.
-    Does NOT apply any changes (report only).
+    Fetch all memories, analyze them, apply the plan, and return a report.
 
-    on_actions(scope_label, actions) is called immediately after each actor's
-    plan is ready, enabling real-time Slack posting rather than waiting for
-    the full run to complete.
+    When apply=True (default), each action is executed immediately after the
+    LLM plan is generated for an actor. Each action dict is annotated with
+    'result' ("applied"/"failed"/"skipped") and 'result_text'.
+
+    on_actions(scope_label, actions) is called after apply (if enabled), so
+    the callback receives actions that are already resolved.
 
     Returns a dict with structure:
       {
@@ -182,6 +264,8 @@ def run(
             ),
             memories,
         )
+        if apply and plan:
+            _apply_actions(mem0, plan)
         report["personal"][actor_key] = {"memories_count": len(memories), "plan": plan}
         report["summary"]["total_memories"] += len(memories)
         if on_actions and plan:
@@ -209,6 +293,8 @@ def run(
             ),
             team_memories,
         )
+        if apply and team_plan:
+            _apply_actions(mem0, team_plan)
         report["team"] = {"memories_count": len(team_memories), "plan": team_plan}
         report["summary"]["total_memories"] += len(team_memories)
         if on_actions and team_plan:

@@ -1,12 +1,6 @@
-"""Post the pruning plan to Slack as interactive approval messages.
-
-Each action (DELETE or MERGE) becomes a separate Slack message with
-Approve / Skip buttons. The button value encodes the full action so the
-approver service can act on it without needing shared state.
-"""
+"""Post applied pruning results to Slack as informational messages."""
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Dict, List
 
@@ -15,8 +9,6 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _SLACK_API = "https://slack.com/api"
-# Slack's hard limit on button value length
-_MAX_VALUE_LEN = 2000
 
 
 def _slack_post(token: str, method: str, payload: Dict) -> Dict:
@@ -34,20 +26,21 @@ def _slack_post(token: str, method: str, payload: Dict) -> Dict:
 
 
 def _action_blocks(action: Dict, scope_label: str) -> List[Dict]:
-    """Build Block Kit blocks for a single pruning action."""
+    """Build Block Kit blocks for a single applied pruning action (info-only)."""
     verb = action.get("action", "").upper()
     reason = action.get("reason", "")
     texts = action.get("texts", {})
     ids = action.get("ids", [])
+    result = action.get("result", "")
+    result_text = action.get("result_text", "")
 
     if verb == "DELETE":
         memory_lines = "\n".join(f"> {texts.get(mid, mid)}" for mid in ids)
-        header = f"*DELETE* — `{scope_label}`\n{memory_lines}\n_Reason: {reason}_"
-
+        body = f"*DELETE* — `{scope_label}`\n{memory_lines}\n_Reason: {reason}_"
     elif verb == "MERGE":
         memory_lines = "\n".join(f"> _{texts.get(mid, mid)}_" for mid in ids)
         new_text = action.get("new_text", "")
-        header = (
+        body = (
             f"*MERGE* — `{scope_label}`\n"
             f"{memory_lines}\n"
             f"*Into:* {new_text}\n"
@@ -56,58 +49,24 @@ def _action_blocks(action: Dict, scope_label: str) -> List[Dict]:
     else:
         return []
 
-    # Encode full action into button value so approver needs no shared state
-    action_value = json.dumps({
-        "action": verb,
-        "ids": ids,
-        "new_text": action.get("new_text", ""),
-        "scope_label": scope_label,
-    })
-    if len(action_value) > _MAX_VALUE_LEN:
-        logger.warning("Button value too long (%d chars), truncating new_text", len(action_value))
-        action_value = json.dumps({
-            "action": verb,
-            "ids": ids,
-            "new_text": action.get("new_text", "")[:200],
-            "scope_label": scope_label,
-        })
+    status_emoji = {"applied": "✅", "failed": "❌"}.get(result, "⚠️")
+    text = f"{body}\n{status_emoji} _{result_text}_"
 
     return [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": header},
-        },
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "👍 Apply"},
-                    "style": "primary",
-                    "action_id": "approve",
-                    "value": action_value,
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "👎 Skip"},
-                    "action_id": "skip",
-                    "value": action_value,
-                },
-            ],
-        },
+        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
         {"type": "divider"},
     ]
 
 
 def post_plan(token: str, channel: str, report: Dict[str, Any]) -> None:
-    """Post the full pruning plan to Slack as interactive per-action messages."""
+    """Post the full applied pruning results to Slack as informational messages."""
     s = report["summary"]
     total = s["total_deletes"] + s["total_merges"]
 
     if total == 0:
         _slack_post(token, "chat.postMessage", {
             "channel": channel,
-            "text": "Lorekeeper: no changes suggested today.",
+            "text": "Lorekeeper: no changes made today.",
         })
         logger.info("Posted 'no changes' message to Slack")
         return
@@ -115,13 +74,13 @@ def post_plan(token: str, channel: str, report: Dict[str, Any]) -> None:
     # Summary header
     _slack_post(token, "chat.postMessage", {
         "channel": channel,
-        "text": f"Lorekeeper: {total} suggested change(s)",
+        "text": f"Lorekeeper: {total} change(s) applied",
         "blocks": [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"Lorekeeper — {total} suggested change(s)",
+                    "text": f"Lorekeeper — {total} change(s) applied",
                 },
             },
             {
@@ -131,9 +90,8 @@ def post_plan(token: str, channel: str, report: Dict[str, Any]) -> None:
                     "text": (
                         f"Analyzed *{s['total_memories']}* memories across "
                         f"*{len(report.get('personal', {}))}* actor(s) + team.\n"
-                        f"Suggested: *{s['total_deletes']}* delete(s), "
-                        f"*{s['total_merges']}* merge(s).\n"
-                        "Use 👍 / 👎 on each item below to approve or skip."
+                        f"Applied: *{s['total_deletes']}* delete(s), "
+                        f"*{s['total_merges']}* merge(s)."
                     ),
                 },
             },
@@ -173,7 +131,7 @@ def post_plan(token: str, channel: str, report: Dict[str, Any]) -> None:
 
 
 def post_actions(token: str, channel: str, scope_label: str, actions: List[Dict]) -> None:
-    """Post a single actor's actions to Slack immediately as they're found.
+    """Post a single actor's applied actions to Slack immediately as they're ready.
 
     Called by pruner.run() via the on_actions callback after each actor
     completes, so messages appear in Slack in real time rather than all at once.
@@ -197,11 +155,11 @@ def post_summary(token: str, channel: str, summary: Dict[str, Any]) -> None:
     """Post a final summary message once the full run is complete."""
     total = summary["total_deletes"] + summary["total_merges"]
     if total == 0:
-        text = f"Lorekeeper complete — no changes suggested across {summary['total_memories']} memories."
+        text = f"Lorekeeper complete — no changes made across {summary['total_memories']} memories."
     else:
         text = (
             f"Lorekeeper complete — analyzed *{summary['total_memories']}* memories, "
-            f"posted *{total}* suggested change(s) above "
+            f"applied *{total}* change(s) "
             f"({summary['total_deletes']} delete(s), {summary['total_merges']} merge(s))."
         )
     _slack_post(token, "chat.postMessage", {
